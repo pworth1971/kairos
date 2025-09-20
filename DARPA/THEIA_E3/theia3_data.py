@@ -13,6 +13,7 @@ def stringtomd5(originstr):
     signaturemd5 = hashlib.sha256()
     signaturemd5.update(originstr)
     return signaturemd5.hexdigest()
-filePath="/the/absolute/path/of/raw_log/"
+
+filePath="./log/"
 
 filelist = os.listdir(filePath)
