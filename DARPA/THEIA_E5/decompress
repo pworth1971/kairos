@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+sudo apt-get install -y pigz pv
+
+find ./theia -type f -name '*.gz' -print0 \
+| while IFS= read -r -d '' f; do
+  out="${f%.gz}"
+  echo "Decompressing: $f  ->  $out"
+  pv "$f" | pigz -d > "$out"    # shows a progress bar per file
+  # rm "$f"  # uncomment to delete the .gz after success
+done |& tee decompress_progress.log
+

@@ -2,184 +2,125 @@
 set -euo pipefail
 
 # ----------------------------------------
-# Ubuntu setup: non-root dev user + Conda (Python 3.12) + PyTorch + Git identity
+# Ubuntu setup for Kairos:
+# - Create user
+# - Use existing Conda if available for that user; otherwise install Miniforge
+# - Create env py310, install PyTorch/PyG + deps
+# - Grant user access to /home/kairos
+# - Switch into the user with env active
 # ----------------------------------------
 
-REQUIRED_OS="ubuntu"
 DEV_USER="pworth"
 DEV_GROUP="$DEV_USER"
 DEV_SHELL="/bin/bash"
-MINIFORGE_DIR="/home/${DEV_USER}/miniforge3"
-ENV_NAME="py312"
-PY_VERSION="3.12"
+ENV_NAME="py310"
+PY_VERSION="3.10"
+MINIFORGE_DIR="/home/${DEV_USER}/miniforge3"   # only used if we need to install conda
+KAIROS_DIR="/home/kairos"
 
-# Git identity (override with env vars if you wish)
 GIT_USER_NAME="${GIT_USER_NAME:-Peter Worth}"
 GIT_USER_EMAIL="${GIT_USER_EMAIL:-peterworthjr@gmail.com}"
 
-# ---- helpers ---------------------------------------------------------------
-
-is_ubuntu() {
-  [[ "${OSTYPE:-}" == "linux-gnu"* ]] || return 1
-  if command -v lsb_release >/dev/null 2>&1; then
-    [[ "$(lsb_release -is 2>/dev/null | tr '[:upper:]' '[:lower:]')" == "ubuntu" ]]
-  else
-    [[ -f /etc/os-release ]] && grep -qi '^id=ubuntu' /etc/os-release
-  fi
-}
-
-need_root() {
+require_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
-    echo "This script must be run as root (use: sudo bash setup.sh)." >&2
+    echo "Run as root: sudo $0" >&2
     exit 1
   fi
 }
 
-user_exists() {
-  id -u "$1" >/dev/null 2>&1
-}
-
-su_user() {
-  # Run a command as the DEV_USER with login shell, preserving HOME
-  sudo -Hiu "$DEV_USER" bash -lc "$*"
-}
+user_exists() { id -u "$1" >/dev/null 2>&1; }
 
 arch_triplet() {
-  local machine
-  machine="$(uname -m)"
-  case "$machine" in
-    x86_64)   echo "x86_64" ;;
-    aarch64)  echo "aarch64" ;;
-    arm64)    echo "aarch64" ;;
-    *)        echo "x86_64" ;;
+  case "$(uname -m)" in
+    x86_64) echo "x86_64" ;;
+    aarch64|arm64) echo "aarch64" ;;
+    *) echo "x86_64" ;;
   esac
 }
 
-has_nvidia() {
-  command -v nvidia-smi >/dev/null 2>&1
-}
+has_nvidia() { command -v nvidia-smi >/dev/null 2>&1; }
 
-# ---- preflight -------------------------------------------------------------
+RUNUSER() { runuser -l "$DEV_USER" -c "$*"; }
 
-need_root
+require_root
 
-if ! is_ubuntu; then
-  echo "This script targets Ubuntu. Detected non-Ubuntu Linux or unsupported OS." >&2
-  exit 1
+# --- Fix sudo hostname warning (ensure hostname resolvable) ---
+HOST="$(hostname)"
+if ! grep -qE "(^|[[:space:]])${HOST}([[:space:]]|$)" /etc/hosts; then
+  echo "127.0.1.1 ${HOST}" >> /etc/hosts
 fi
 
-echo "[1/7] Updating apt and installing base dev tools..."
+echo "[1/10] apt update + base tools + locales..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y --no-install-recommends \
   sudo ca-certificates curl wget git build-essential pkg-config \
-  libssl-dev openssl bzip2
+  libssl-dev openssl bzip2 unzip htop \
+  graphviz libgraphviz-dev \
+  postgresql postgresql-contrib libpq-dev \
+  locales
 
-echo "[2/7] Creating non-root dev user '${DEV_USER}' (idempotent)..."
+# Locale: enable en_US.UTF-8 to silence perl/locale warnings
+sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+locale-gen >/dev/null
+update-locale LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+
+echo "[2/10] Create dev user '${DEV_USER}' if needed..."
 if ! user_exists "$DEV_USER"; then
   adduser --disabled-password --gecos "" "$DEV_USER"
   usermod -aG sudo "$DEV_USER"
   chsh -s "$DEV_SHELL" "$DEV_USER"
-else
-  echo "User '${DEV_USER}' already exists. Ensuring sudo and shell..."
-  usermod -aG sudo "$DEV_USER" || true
-  chsh -s "$DEV_SHELL" "$DEV_USER" || true
 fi
+mkdir -p "/home/${DEV_USER}"
 chown -R "${DEV_USER}:${DEV_GROUP}" "/home/${DEV_USER}"
 
-echo "[3/7] Installing Miniforge (Conda) for '${DEV_USER}'..."
-ARCH="$(arch_triplet)"
-INSTALLER="Miniforge3-Linux-${ARCH}.sh"
-INSTALL_URL="https://github.com/conda-forge/miniforge/releases/latest/download/${INSTALLER}"
-
-if [[ -d "$MINIFORGE_DIR" ]]; then
-  echo "Miniforge already present at ${MINIFORGE_DIR} — skipping install."
+echo "[3/10] Detect Conda for ${DEV_USER} (install Miniforge only if missing)..."
+if RUNUSER "command -v conda >/dev/null 2>&1"; then
+  CONDA_BASE="$(RUNUSER 'conda info --base 2>/dev/null' || true)"
 else
-  su_user "cd ~ && wget -q ${INSTALL_URL} -O ${INSTALLER}"
-  su_user "bash ${INSTALLER} -b -p ${MINIFORGE_DIR}"
-  su_user "rm -f ${INSTALLER}"
-  su_user "${MINIFORGE_DIR}/bin/conda init bash"
+  CONDA_BASE=""
 fi
 
-PROFILE_FILE="/home/${DEV_USER}/.bashrc"
-if ! su_user "grep -q 'conda initialize' '${PROFILE_FILE}'"; then
-  su_user "echo '# conda initialized by setup.sh (if not already)' >> '${PROFILE_FILE}'"
-  su_user "${MINIFORGE_DIR}/bin/conda init bash"
-fi
-
-echo "[4/7] Creating Python ${PY_VERSION} environment '${ENV_NAME}' (idempotent)..."
-if su_user "${MINIFORGE_DIR}/bin/conda env list | awk '{print \$1}' | grep -qx '${ENV_NAME}'"; then
-  echo "Conda env '${ENV_NAME}' already exists."
+if [[ -z "${CONDA_BASE}" || ! -d "${CONDA_BASE}" ]]; then
+  echo "No existing Conda found for ${DEV_USER} — installing Miniforge..."
+  ARCH="$(arch_triplet)"
+  INSTALLER="Miniforge3-Linux-${ARCH}.sh"
+  INSTALL_URL="https://github.com/conda-forge/miniforge/releases/latest/download/${INSTALLER}"
+  RUNUSER "cd ~ && wget -q '${INSTALL_URL}' -O '${INSTALLER}' && bash '${INSTALLER}' -b -p '${MINIFORGE_DIR}' && rm -f '${INSTALLER}' && '${MINIFORGE_DIR}/bin/conda' init bash"
+  CONDA_BASE="${MINIFORGE_DIR}"
 else
-  su_user "${MINIFORGE_DIR}/bin/conda create -y -n '${ENV_NAME}' python='${PY_VERSION}'"
+  echo "Found Conda at: ${CONDA_BASE}"
+  RUNUSER "'${CONDA_BASE}/bin/conda' init bash || true"
 fi
 
-echo "[5/7] Configuring Conda channels and installing packages..."
-su_user "${MINIFORGE_DIR}/bin/conda config --add channels conda-forge || true"
-su_user "${MINIFORGE_DIR}/bin/conda config --add channels pytorch || true"
-su_user "${MINIFORGE_DIR}/bin/conda config --set channel_priority strict || true"
+echo "[4/10] Create Python ${PY_VERSION} env '${ENV_NAME}' (if missing)..."
+RUNUSER "source '${CONDA_BASE}/etc/profile.d/conda.sh' && (conda env list | awk '{print \$1}' | grep -qx '${ENV_NAME}' || conda create -y -n '${ENV_NAME}' python='${PY_VERSION}')"
 
+echo "[5/10] Configure Conda channels..."
+RUNUSER "conda config --add channels conda-forge || true"
+RUNUSER "conda config --add channels pytorch || true"
+RUNUSER "conda config --add channels pyg || true"
+RUNUSER "conda config --set channel_priority strict || true"
+
+echo "[6/10] Install PyTorch (CUDA if available)..."
 if has_nvidia; then
-  echo "NVIDIA GPU detected — installing CUDA-enabled PyTorch..."
-  su_user "source '${MINIFORGE_DIR}/etc/profile.d/conda.sh' && \
-           conda activate '${ENV_NAME}' && \
-           conda install -y -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda=12.1 && \
-           conda install -y torchtext transformers safetensors=0.4.5"
+  RUNUSER "source '${CONDA_BASE}/etc/profile.d/conda.sh' && conda activate '${ENV_NAME}' && conda install -y -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda=12.1"
 else
-  echo "No NVIDIA GPU detected — installing CPU-only PyTorch..."
-  su_user "source '${MINIFORGE_DIR}/etc/profile.d/conda.sh' && \
-           conda activate '${ENV_NAME}' && \
-           conda install -y -c pytorch pytorch torchvision torchaudio cpuonly && \
-           conda install -y torchtext transformers safetensors=0.4.5"
+  RUNUSER "source '${CONDA_BASE}/etc/profile.d/conda.sh' && conda activate '${ENV_NAME}' && conda install -y -c pytorch pytorch torchvision torchaudio cpuonly"
 fi
 
-echo "[6/7] Setting Git identity for ${DEV_USER} (idempotent)..."
-# Only set if not already configured
-if ! su_user "git config --global user.name >/dev/null 2>&1 && git config --global user.email >/dev/null 2>&1"; then
-  su_user "git config --global user.name \"${GIT_USER_NAME}\""
-  su_user "git config --global user.email \"${GIT_USER_EMAIL}\""
-else
-  echo "Global Git user.name and user.email already set for ${DEV_USER}."
-fi
+echo "[7/10] Install PyG + common libs..."
+RUNUSER "source '${CONDA_BASE}/etc/profile.d/conda.sh' && conda activate '${ENV_NAME}' && conda install -y -c pyg pyg"
+RUNUSER "source '${CONDA_BASE}/etc/profile.d/conda.sh' && conda activate '${ENV_NAME}' && conda install -y -c conda-forge numpy pandas scipy scikit-learn networkx tqdm matplotlib seaborn jupyterlab ipykernel sqlalchemy psycopg2-binary pydot graphviz"
 
-echo "[7/7] Adding convenience aliases to ${DEV_USER}'s .bashrc..."
-ALIAS_BLOCK=$(cat <<'EOF'
-# ---- Python dev shortcuts (added by setup.sh) ----
-alias ca='conda activate'
-alias cde='conda deactivate'
-alias workon='conda activate py312'
-EOF
-)
-if ! su_user "grep -q 'Python dev shortcuts (added by setup.sh)' '${PROFILE_FILE}'"; then
-  su_user "printf '%s\n' \"${ALIAS_BLOCK}\" >> '${PROFILE_FILE}'"
-fi
+echo "[8/10] Git identity..."
+RUNUSER "git config --global user.name '${GIT_USER_NAME}'"
+RUNUSER "git config --global user.email '${GIT_USER_EMAIL}'"
 
-cat <<EOF
+echo "[9/10] Granting ${DEV_USER} access to ${KAIROS_DIR}..."
+mkdir -p "${KAIROS_DIR}"
+chown -R "${DEV_USER}:${DEV_GROUP}" "${KAIROS_DIR}"
 
-✅ All set!
-
-User:
-  - Created/updated user: ${DEV_USER} (member of 'sudo')
-
-Conda:
-  - Installed: ${MINIFORGE_DIR}
-  - Env: ${ENV_NAME} (Python ${PY_VERSION})
-
-PyTorch:
-  - Installed for $(has_nvidia && echo 'CUDA (12.1)' || echo 'CPU-only')
-
-Git (global for ${DEV_USER}):
-  - user.name = ${GIT_USER_NAME}
-  - user.email = ${GIT_USER_EMAIL}
-
-Next steps:
-  sudo -iu ${DEV_USER}
-  conda activate ${ENV_NAME}
-  git config --list --show-origin | egrep 'user.name|user.email'
-  python -V
-  python -c "import torch; print(torch.__version__, 'CUDA available:', torch.cuda.is_available())"
-
-Override Git identity on install by exporting:
-  GIT_USER_NAME="Your Name" GIT_USER_EMAIL="you@domain.tld" sudo -E bash setup.sh
-
-EOF
+echo "[10/10] Switch into '${DEV_USER}' with env '${ENV_NAME}' active..."
+exec runuser -l "$DEV_USER" -c "bash -lc 'source \"${CONDA_BASE}/etc/profile.d/conda.sh\" && conda activate \"${ENV_NAME}\" && echo && echo \"✅ Ready as ${DEV_USER} with Conda env ${ENV_NAME} active.\" && echo \"   python: \$(python -V)\" && echo \"   conda : \$(conda --version)\" && echo && exec bash -i'"

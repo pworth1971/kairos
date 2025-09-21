@@ -2,7 +2,7 @@
  "cells": [
   {
    "cell_type": "code",
-   "execution_count": null,
+   "execution_count": 1,
    "metadata": {},
    "outputs": [
     {
@@ -33,94 +33,10 @@
     "from torch_geometric.data import *\n",
     "import threading\n",
     "import networkx as nx\n",
-    "import math"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 13,
-   "metadata": {},
-   "outputs": [
-    {
-     "name": "stdout",
-     "output_type": "stream",
-     "text": [
-      "Scanning: /home/kairos/DARPA/THEIA_E5/raw_log\n",
-      "Found 51 files:\n",
-      "archive\n",
-      "bins.md5sum\n",
-      "ta1-theia-1-e5-official-1.bin\n",
-      "ta1-theia-1-e5-official-1.bin.1\n",
-      "ta1-theia-1-e5-official-1.bin.2\n",
-      "ta1-theia-1-e5-official-1.json\n",
-      "ta1-theia-1-e5-official-1.json.1\n",
-      "ta1-theia-1-e5-official-1.json.2\n",
-      "ta1-theia-1-e5-official-2.bin\n",
-      "ta1-theia-1-e5-official-2.bin.1\n",
-      "ta1-theia-1-e5-official-2.bin.10\n",
-      "ta1-theia-1-e5-official-2.bin.11\n",
-      "ta1-theia-1-e5-official-2.bin.12\n",
-      "ta1-theia-1-e5-official-2.bin.13\n",
-      "ta1-theia-1-e5-official-2.bin.14\n",
-      "ta1-theia-1-e5-official-2.bin.15\n",
-      "ta1-theia-1-e5-official-2.bin.16\n",
-      "ta1-theia-1-e5-official-2.bin.17\n",
-      "ta1-theia-1-e5-official-2.bin.18\n",
-      "ta1-theia-1-e5-official-2.bin.19\n",
-      "ta1-theia-1-e5-official-2.bin.2\n",
-      "ta1-theia-1-e5-official-2.bin.20\n",
-      "ta1-theia-1-e5-official-2.bin.21\n",
-      "ta1-theia-1-e5-official-2.bin.22\n",
-      "ta1-theia-1-e5-official-2.bin.23\n",
-      "ta1-theia-1-e5-official-2.bin.24\n",
-      "ta1-theia-1-e5-official-2.bin.25\n",
-      "ta1-theia-1-e5-official-2.bin.26\n",
-      "ta1-theia-1-e5-official-2.bin.27\n",
-      "ta1-theia-1-e5-official-2.bin.28\n",
-      "ta1-theia-1-e5-official-2.bin.29\n",
-      "ta1-theia-1-e5-official-2.bin.3\n",
-      "ta1-theia-1-e5-official-2.bin.30\n",
-      "ta1-theia-1-e5-official-2.bin.31\n",
-      "ta1-theia-1-e5-official-2.bin.32\n",
-      "ta1-theia-1-e5-official-2.bin.33\n",
-      "ta1-theia-1-e5-official-2.bin.34\n",
-      "ta1-theia-1-e5-official-2.bin.35\n",
-      "ta1-theia-1-e5-official-2.bin.36\n",
-      "ta1-theia-1-e5-official-2.bin.37\n",
-      "ta1-theia-1-e5-official-2.bin.38\n",
-      "ta1-theia-1-e5-official-2.bin.39\n",
-      "ta1-theia-1-e5-official-2.bin.4\n",
-      "ta1-theia-1-e5-official-2.bin.5\n",
-      "ta1-theia-1-e5-official-2.bin.6\n",
-      "ta1-theia-1-e5-official-2.bin.7\n",
-      "ta1-theia-1-e5-official-2.bin.8\n",
-      "ta1-theia-1-e5-official-2.bin.9\n",
-      "ta1-theia-2-e5-official-1.bin\n",
-      "ta1-theia-2-e5-official-1.bin.1\n",
-      "ta1-theia-2-e5-official-1.bin.2\n"
-     ]
-    }
-   ],
-   "source": [
-    "from pathlib import Path\n",
+    "import math\n",
     "\n",
-    "root = Path.cwd() / \"raw_log\"\n",
-    "print(f\"Scanning: {root.resolve()}\")\n",
-    "\n",
-    "# Non-recursive (just inside raw_log/)\n",
-    "files = sorted(p.name for p in root.iterdir())\n",
-    "\n",
-    "print(f\"Found {len(files)} files:\")\n",
-    "for name in files:\n",
-    "    print(name)"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 14,
-   "metadata": {},
-   "outputs": [],
-   "source": [
+    "filePath=\"./raw_log/\"\n",
+    "filelist = os.listdir(filePath)\n",
     "import hashlib\n",
     "def stringtomd5(originstr):\n",
     "    originstr = originstr.encode(\"utf-8\")\n",
@@ -131,7 +47,7 @@
   },
   {
    "cell_type": "code",
-   "execution_count": 15,
+   "execution_count": 7,
    "metadata": {},
    "outputs": [],
    "source": [
@@ -267,7 +183,7 @@
   },
   {
    "cell_type": "code",
-   "execution_count": 16,
+   "execution_count": 8,
    "metadata": {},
    "outputs": [],
    "source": [
@@ -345,6 +261,13 @@
     "    timeStamp = timestamp\n",
     "    return int(timeStamp)\n"
    ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
   },
   {
    "cell_type": "markdown",
