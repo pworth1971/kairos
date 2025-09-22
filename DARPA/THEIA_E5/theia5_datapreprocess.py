@@ -52,7 +52,7 @@ import json
 import hashlib
 import logging
 import time
-import pytz
+#import pytz
 
 from time import mktime
 from tqdm import tqdm
@@ -263,12 +263,6 @@ import psycopg2
 from psycopg2.extras import DictCursor
 
 
-# --- Compile once for speed (matches your current pattern/fields) ---
-PAT_NETFLOW = re.compile(
-    r'NetFlowObject":{"uuid":"(.*?)".*?'
-    r'"localAddress":{"string":"(.*?)"},"localPort":{"int":(.*?)},"remoteAddress":{"string":"(.*?)"},"remotePort":{"int":(.*?)}'
-)
-
 def run(args):
 
     logging.basicConfig(
@@ -338,9 +332,18 @@ def run(args):
     # netobjset = set()
     # filePath = Path.cwd() / "raw_log"
 
+
+    # --------------------------------------------------------------------------
+    # ----------------------------- NetFlow ------------------------------------
+    #
     # --- NetFlow extraction init (must be before the loop) ---
+    #
+    # --------------------------------------------------------------------------
+
     import re, time
     from pathlib import Path
+
+    print("\n\tparsing netflow info...\n")
 
     PAT_NETFLOW = re.compile(
         r'NetFlowObject":{"uuid":"(.*?)".*?'
@@ -470,11 +473,121 @@ def run(args):
     # del datalist
 
 
+    # --------------------------------------------------------------------------
+    # ----------------------------- Process ------------------------------------
+    #
+    # --- NetFlow extraction init (must be before the loop) ---
+    #
+    # --------------------------------------------------------------------------
+
+    print("\n\tparsing process info...\n")
+    
+    scusess_count=0
+    fail_count=0
+    subject_objset=set()
+    subject_obj2hash={}# 
+
+    for file in tqdm(fileList):
+        fullPath = Path(filePath) / file
+        print(f"processing file: {fullPath} ...")
+
+        with open(fullPath, "r") as f:
+#             for line in tqdm(f): 
+            for line in (f):
+                if "schema.avro.cdm20.Subject" in line:
+#                     print(line)
+                    subject_uuid=re.findall('avro.cdm20.Subject":{"uuid":"(.*?)",(.*?)"path":"(.*?)"',line)
+#                
+                    try:
+#                         (subject_uuid[0][-1])
+                        subject_obj2hash[subject_uuid[0][0]]=subject_uuid[0][-1]
+                        scusess_count+=1
+                    except:
+                        try:
+                            subject_obj2hash[subject_uuid[0][0]]="null"
+                        except:
+                            pass
+#                             print(line)
+#                         print(line)                        
+                        fail_count+=1
+
+
+    procdatalist=[]
+    for i in subject_obj2hash.keys():
+        if len(i)!=64:
+            procdatalist.append([i]+[stringtomd5(subject_obj2hash[i]),subject_obj2hash[i]])
+
+    # Optional: peek at a few rows for sanity
+    pprint(procdatalist[:3])
+    print(f"Prepared {len(procdatalist)} rows for insert into subject_node_table")
+
+    if procdatalist:
+        # Always specify columns and a template; ON CONFLICT avoids duplicate PK errors
+        sql = '''
+            INSERT INTO subject_node_table
+                VALUES %s
+            '''
+        execute_values(cur,sql, procdatalist, page_size=10000)
+        conn.commit()
+        print("Insert committed.")
+    else:
+        print("No rows to insert; skipping database write.")
+
+
+    # --------------------------------------------------------------------------
+    # ------------------------------- File -------------------------------------
+    #
+    #
+    # --------------------------------------------------------------------------
+
+    print("\n\tparsing file info...\n")
+
+    file_node=set()
+    file_obj2hash={}
+    fail_count=0
+    for file in tqdm(fileList):
+        
+        fullPath = Path(filePath) / file
+        print(f"processing file: {fullPath} ...")
+
+        with open(fullPath, "r") as f:
+            for line in f:
+                if "avro.cdm20.FileObject" in line:
+#                     print(line)
+                    Object_uuid=re.findall('avro.cdm20.FileObject":{"uuid":"(.*?)",(.*?)"filename":"(.*?)"',line) 
+                    try:
+                        file_node.add(Object_uuid[0])
+                        file_obj2hash[Object_uuid[0][0]]=Object_uuid[0][-1]
+                    except:
+                        fail_count+=1
+#                         print(line)
+
+    filedatalist=[]
+    for i in file_obj2hash.keys():
+        if len(i)!=64:
+            filedatalist.append([i]+[stringtomd5(file_obj2hash[i]),file_obj2hash[i]])
+
+    # Optional: peek at a few rows for sanity
+    pprint(filedatalist[:3])
+    print(f"Prepared {len(filedatalist)} rows for insert into file_node_table")
+
+    if filedatalist:
+        # Always specify columns and a template; ON CONFLICT avoids duplicate PK errors
+        sql = '''insert into file_node_table
+                            values %s
+                '''
+        execute_values(cur,sql, filedatalist, page_size=10000)
+        conn.commit() 
+        print("Insert committed.")
+    else:
+        print("No rows to insert; skipping database write.")
+
 
 # --------------------------------- CLI -----------------------------------
 
 def make_parser():
-    p = argparse.ArgumentParser(description="THEIA E3 preprocessing → Postgres → TemporalData graphs")
+    p = argparse.ArgumentParser(description="THEIA E5 preprocessing → Postgres → TemporalData graphs")
+
     p.add_argument("--raw-dir", default=DEFAULT_RAW_DIR, help=f"Directory of THEIA E3 raw logs (default: {DEFAULT_RAW_DIR})")
     p.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help=f"Output directory for graphs/artifacts (default: {DEFAULT_OUT_DIR})")
 
