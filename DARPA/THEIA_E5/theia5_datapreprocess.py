@@ -166,82 +166,6 @@ def stringtomd5(originstr):
     signaturemd5 = hashlib.sha256()
     signaturemd5.update(originstr)
     return signaturemd5.hexdigest() 
-    
-# --------------------------- DB schema helpers ---------------------------
-
-"""
-# execute the psql with postgres user
-sudo -u postgres psql
-
-# create the database
-postgres=# create database tc_e5_theia_dataset_db;
-
-# switch to the created database
-postgres=# \connect tc_e5_theia_dataset_db;
-
-# create the event table and grant the privileges to postgres
-tc_e5_theia_dataset_db=# create table event_table
-(
-    src_node      varchar,
-    src_index_id  varchar,
-    operation     varchar,
-    dst_node      varchar,
-    dst_index_id  varchar,
-    timestamp_rec bigint,
-    _id           serial
-);
-tc_e5_theia_dataset_db=# alter table event_table owner to postgres;
-tc_e5_theia_dataset_db=# create unique index event_table__id_uindex on event_table (_id); grant delete, insert, references, select, trigger, truncate, update on event_table to postgres;
-
-# create the file table
-tc_e5_theia_dataset_db=# create table file_node_table
-(
-    node_uuid varchar not null,
-    hash_id   varchar not null,
-    path      varchar,
-    constraint file_node_table_pk
-        primary key (node_uuid, hash_id)
-);
-tc_e5_theia_dataset_db=# alter table file_node_table owner to postgres;
-
-# create the netflow table
-tc_e5_theia_dataset_db=# create table netflow_node_table
-(
-    node_uuid varchar not null,
-    hash_id   varchar not null,
-    src_addr  varchar,
-    src_port  varchar,
-    dst_addr  varchar,
-    dst_port  varchar,
-    constraint netflow_node_table_pk
-        primary key (node_uuid, hash_id)
-);
-tc_e5_theia_dataset_db=# alter table netflow_node_table owner to postgres;
-
-# create the subject table
-tc_e5_theia_dataset_db=# create table subject_node_table
-(
-    node_uuid varchar,
-    hash_id   varchar,
-    exec      varchar
-);
-tc_e5_theia_dataset_db=# alter table subject_node_table owner to postgres;
-
-# create the node2id table
-tc_e5_theia_dataset_db=# create table node2id
-(
-    hash_id   varchar not null
-        constraint node2id_pk
-            primary key,
-    node_type varchar,
-    msg       varchar,
-    index_id  bigint
-);
-tc_e5_theia_dataset_db=# alter table node2id owner to postgres;
-tc_e5_theia_dataset_db=# create unique index node2id_hash_id_uindex on node2id (hash_id);
-
-"""
-
 
 
 # --------------------------------- Main ----------------------------------
@@ -285,7 +209,7 @@ def run(args):
     #
     from pathlib import Path
 
-    root = Path.cwd() / "raw_log"
+    root = Path.cwd() / "theia"
     print(f"Scanning: {root.resolve()}")
 
     # Only files starting with 'ta1-theia' AND containing 'json' (case-insensitive)
@@ -318,7 +242,7 @@ def run(args):
 
     cur = conn.cursor()
 
-    filePath = raw_dir
+    filePath = raw_dir + '/theia/'
     print("filePath:" + filePath)
 
 

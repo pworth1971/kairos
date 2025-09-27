@@ -41,7 +41,8 @@ conda activate "$ENV_NAME"
 
 
 # Step 6. Install base conda packages
-echo "Installing psycopg2 and tqdm..."
+echo "Updating conda packags and installing psycopg2 and tqdm..."
+conda update --all
 conda install -y psycopg2 tqdm
 
 
