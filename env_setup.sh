@@ -39,7 +39,30 @@ fi
 echo "[*] Activating conda environment '$ENV_NAME'..."
 conda activate "$ENV_NAME"
 
-# Step 6: Final message
+
+# Step 6. Install base conda packages
+echo "Installing psycopg2 and tqdm..."
+conda install -y psycopg2 tqdm
+
+
+# Step 7. Install pinned pip packages
+echo "Installing pinned pip packages..."
+pip install scikit-learn networkx xxhash graphviz
+
+# Step 8. Install PyTorch GPU + PyG stack
+echo "Installing PyTorch 1.13.1 (CUDA 11.7) and PyTorch Geometric..."
+conda install -y -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda
+
+pip install torch_geometric
+# Optional dependencies:
+pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.8.0+cpu.html
+
+# Summary
+cat <<EOF
+
+✅ Kairos environment setup complete!
+
+# Step 9: Final message
 echo "------------------------------------------------------------"
 echo "✅ Git configured: $(git config --global user.name) <$(git config --global user.email)>"
 echo "✅ Conda environment '$ENV_NAME' (Python $PY_VER) created and activated"
@@ -47,3 +70,14 @@ echo ""
 echo "To activate it again later, run:"
 echo "    source /root/miniconda3/etc/profile.d/conda.sh && conda activate $ENV_NAME"
 echo "------------------------------------------------------------"
+
+Environment:
+  - Name: ${ENV_NAME}
+  - Python: ${PY_VERSION}
+  - Installed:
+      * psycopg2, tqdm (conda)
+      * scikit-learn==1.2.0, networkx==2.8.7, xxhash==3.2.0, graphviz==0.20.1 (pip)
+      * PyTorch 1.13.1 + CUDA 11.7, TorchVision 0.14.1, Torchaudio 0.13.1 (conda)
+      * torch_geometric==2.0.0, pyg_lib, torch_scatter, torch_sparse, torch_cluster, torch_spline_conv (pip)
+
+EOF
