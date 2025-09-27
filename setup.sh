@@ -4,7 +4,6 @@ set -e
 # -----------------------------------------------------------------------------
 # Script: setup.sh
 # Purpose: Install Python 3.10 env and PostgreSQL 18
-#
 # -----------------------------------------------------------------------------
 
 # Variables
@@ -26,3 +25,25 @@ git config --global user.email "$GIT_USER_EMAIL"
 # Step 3: Create Python 3.10 environment
 echo "[*] Creating conda environment '$ENV_NAME' with Python $PY_VER..."
 conda create -y -n "$ENV_NAME" python="$PY_VER"
+
+# Step 4: Source conda.sh so conda activate works in this shell
+if [ -f "/root/miniconda3/etc/profile.d/conda.sh" ]; then
+    echo "[*] Sourcing conda.sh..."
+    source /root/miniconda3/etc/profile.d/conda.sh
+else
+    echo "[!] Could not find /root/miniconda3/etc/profile.d/conda.sh"
+    echo "    Make sure Miniconda/Conda is installed in /root/miniconda3"
+fi
+
+# Step 5: Activate the new environment
+echo "[*] Activating conda environment '$ENV_NAME'..."
+conda activate "$ENV_NAME"
+
+# Step 6: Final message
+echo "------------------------------------------------------------"
+echo "✅ Git configured: $(git config --global user.name) <$(git config --global user.email)>"
+echo "✅ Conda environment '$ENV_NAME' (Python $PY_VER) created and activated"
+echo ""
+echo "To activate it again later, run:"
+echo "    source /root/miniconda3/etc/profile.d/conda.sh && conda activate $ENV_NAME"
+echo "------------------------------------------------------------"
