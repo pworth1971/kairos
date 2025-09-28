@@ -88,6 +88,7 @@ DEFAULT_OUT_DIR = "/home/kairos/DARPA/THEIA_E5/train_graph/"
 DEFAULT_SUB_DIR = "theia/"
 DEFAULT_EMB_DIR = "./embeddings/"
 
+NODEID2MSG_FILE = "nodeid2msg.pkl"  # File to save the nodeid2msg data
 
 # Postgres connection defaults; can be overridden by env vars or CLI
 DEFAULT_PG = dict(
@@ -259,7 +260,24 @@ def bulk_insert(conn, table_name, datalist, batch_size=100000):
 
 # ------------------------------------ BULK INSERT Handling -----------------------------------------
 
+import pickle
 
+# ------------------------- Helper Functions ------------------------
+
+def save_nodeid2msg(nodeid2msg):
+    """Save the nodeid2msg dictionary to a file."""
+    with open(NODEID2MSG_FILE, 'wb') as f:
+        pickle.dump(nodeid2msg, f)
+    logging.info(f"Saved nodeid2msg to {NODEID2MSG_FILE}")
+
+def load_nodeid2msg():
+    """Load the nodeid2msg dictionary from a file if it exists."""
+    if os.path.exists(NODEID2MSG_FILE):
+        with open(NODEID2MSG_FILE, 'rb') as f:
+            nodeid2msg = pickle.load(f)
+        logging.info(f"Loaded nodeid2msg from {NODEID2MSG_FILE}")
+        return nodeid2msg
+    return {}
 
 # --------------------------------- Main ----------------------------------
 
@@ -401,14 +419,13 @@ def run(args):
 
                 # Get the total number of lines in the file for the progress bar
                 total_lines_in_file = sum(1 for _ in f)
-                f.seek(0)  # Reset file pointer to the beginning
+                f.seek(0)                                   # Reset file pointer to the beginning
                 
                 # Create a progress bar for the lines
                 with tqdm(total=total_lines_in_file, desc="Processing lines", leave=False) as line_progress:
 
                     for line in f:
                         lines += 1
-                        
                         line_progress.update(1)  # Update the progress bar for each line
 
                         if "NetFlowObject" not in line:
@@ -513,6 +530,7 @@ def run(args):
         del netobj2hash
         del datalist
         gc.collect()
+
     else:
         logging.warning("\r--skipping netflow info parsing--")
 
@@ -550,11 +568,8 @@ def run(args):
                         line_progress.update(1)  # Update the progress bar for each line
 
                         if "schema.avro.cdm20.Subject" in line:
-        #                     print(line)
-                            subject_uuid=re.findall('avro.cdm20.Subject":{"uuid":"(.*?)",(.*?)"path":"(.*?)"',line)
-        #                
+                            subject_uuid=re.findall('avro.cdm20.Subject":{"uuid":"(.*?)",(.*?)"path":"(.*?)"',line)                
                             try:
-        #                         (subject_uuid[0][-1])
                                 subject_obj2hash[subject_uuid[0][0]]=subject_uuid[0][-1]
                                 scusess_count+=1
                             except:
@@ -562,8 +577,6 @@ def run(args):
                                     subject_obj2hash[subject_uuid[0][0]]="null"
                                 except:
                                     pass
-        #                             print(line)
-        #                         print(line)                        
                                 fail_count+=1
 
         procdatalist=[]
@@ -589,6 +602,7 @@ def run(args):
 
         del procdatalist
         gc.collect()
+    
     else:
         logging.warning("\r--skipping process info parsing--")
 
@@ -835,6 +849,10 @@ def run(args):
         logging.info(f"Prepared {len(datalist)} rows for insert into event_table")
         
         bulk_insert(conn, 'event_table', datalist, batch_size=100000)
+
+        # Save nodeid2msg to disk for future runs
+        save_nodeid2msg(nodeid2msg)
+
     else:
         logging.warning("skipping event parsing...")
 
@@ -846,6 +864,9 @@ def run(args):
     # Initialize FeatureHasher for string and dictionary inputs
     FH_string=FeatureHasher(n_features=16,input_type="string")
     FH_dict=FeatureHasher(n_features=16,input_type="dict")
+
+    # Load nodeid2msg from disk or build it from the database
+    nodeid2msg = load_nodeid2msg()
 
     def path2higlist(p):
         """Convert a file path into a hierarchical list."""
@@ -914,6 +935,9 @@ def run(args):
     
             # Convert the hierarchical list to string and append to the message dictionary list
             node_msg_dic_list.append(list2str(higlist))
+
+            logging.info(f"node_msg_dic_list-type: {type(node_msg_dic_list)}")
+            logging.info(f"node_msg_dic_list-len: {len(node_msg_dic_list)}")
 
     # Initialize a list to store hierarchical vectors for nodes
     node2higvec=[]
