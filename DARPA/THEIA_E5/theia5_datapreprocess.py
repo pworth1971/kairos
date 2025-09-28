@@ -68,11 +68,17 @@ import psycopg2
 from psycopg2 import extras as psql_extras
 from psycopg2.extras import execute_values
 from psycopg2.extras import DictCursor
-
 import psycopg2.extras
+
 from contextlib import contextmanager
 import gc
-import logging
+
+import torch
+import torch_geometric
+from torch_geometric.transforms import NormalizeFeatures
+
+from sklearn.feature_extraction import FeatureHasher
+from sklearn import preprocessing 
 
 
 # ----------------------------- Configuration -----------------------------
@@ -80,6 +86,8 @@ import logging
 DEFAULT_RAW_DIR = "/home/kairos/DARPA/THEIA_E5/"
 DEFAULT_OUT_DIR = "/home/kairos/DARPA/THEIA_E5/train_graph/"
 DEFAULT_SUB_DIR = "theia/"
+DEFAULT_EMB_DIR = "./embeddings/"
+
 
 # Postgres connection defaults; can be overridden by env vars or CLI
 DEFAULT_PG = dict(
@@ -743,12 +751,13 @@ def run(args):
 
         del node_list_database
         gc.collect()
+
     else:
         logging.warning("skipped node2id parsing...")
 
 
     # -----------------------------------------------------------------------------------------------
-    #  ------------------------------------- event table data ---------------------------------------
+    # ------------------------------------- event table data ----------------------------------------
     #
 
     if not args.skip_events:
@@ -830,6 +839,126 @@ def run(args):
         logging.warning("skipping event parsing...")
 
 
+    # -----------------------------------------------------------------------------------------------
+    # -------------------------------------- featurization ------------------------------------------
+    #
+
+    # Initialize FeatureHasher for string and dictionary inputs
+    FH_string=FeatureHasher(n_features=16,input_type="string")
+    FH_dict=FeatureHasher(n_features=16,input_type="dict")
+
+    def path2higlist(p):
+        """Convert a file path into a hierarchical list."""
+        l=[]
+        spl=p.strip().split('/')
+        for i in spl:
+            if len(l)!=0:
+                l.append(l[-1]+'/'+i)
+            else:
+                l.append(i)
+    #     print(l)
+        return l
+
+    def ip2higlist(p):
+        """Convert an IP address into a hierarchical list."""
+        l=[]
+        spl=p.strip().split('.')
+        for i in spl:
+            if len(l)!=0:
+                l.append(l[-1]+'.'+i)
+            else:
+                l.append(i)
+    #     print(l)
+        return l
+
+    def subject2higlist(p):
+        """Convert a subject string into a hierarchical list."""
+        l=[]
+        spl=p.strip().split('/')
+        for i in spl:
+            if len(l)!=0:
+                l.append(l[-1]+'/'+i)
+            else:
+                l.append(i)
+    #     print(l)
+        return l
+
+    def list2str(l):
+        """Convert a list into a single string by concatenating elements."""
+        s=''
+        for i in l:
+            s+=i
+        return s
+
+    # Initialize lists for node message vectors and dictionaries
+    node_msg_vec=[]
+    node_msg_dic_list=[]
+
+    # Process each node ID in nodeid2msg
+    for i in tqdm(nodeid2msg.keys()):
+        if type(i)==int:                                # ensure key is an int
+            # Check for 'netflow' key and build hierarchical list
+            if 'netflow' in nodeid2msg[i].keys():
+                higlist=['netflow']
+                higlist+=ip2higlist(nodeid2msg[i]['netflow'])
+            
+            # Check for 'file' key and build hierarchical list
+            if 'file' in nodeid2msg[i].keys():
+                higlist=['file']
+                higlist+=path2higlist(nodeid2msg[i]['file'])
+
+            # Check for 'subject' key and build hierarchical list
+            if 'subject' in nodeid2msg[i].keys():
+                higlist=['subject']
+                higlist+=subject2higlist(nodeid2msg[i]['subject'])
+    
+            # Convert the hierarchical list to string and append to the message dictionary list
+            node_msg_dic_list.append(list2str(higlist))
+
+    # Initialize a list to store hierarchical vectors for nodes
+    node2higvec=[]
+
+    # Convert each message dictionary to a high-dimensional vector
+    for i in tqdm(node_msg_dic_list):
+        vec=FH_string.transform([i]).toarray()
+        node2higvec.append(vec)
+
+    # Reshape the node vector array
+    node2higvec=np.array(node2higvec).reshape([-1,16])
+
+    # Define relation to ID mapping
+    rel2id = {
+        1: 'EVENT_CONNECT', 'EVENT_CONNECT': 1,
+        2: 'EVENT_EXECUTE', 'EVENT_EXECUTE': 2,
+        3: 'EVENT_OPEN', 'EVENT_OPEN': 3,
+        4: 'EVENT_READ', 'EVENT_READ': 4,
+        5: 'EVENT_RECVFROM', 'EVENT_RECVFROM': 5,
+        6: 'EVENT_RECVMSG', 'EVENT_RECVMSG': 6,
+        7: 'EVENT_SENDMSG', 'EVENT_SENDMSG': 7,
+        8: 'EVENT_SENDTO', 'EVENT_SENDTO': 8,
+        9: 'EVENT_WRITE', 'EVENT_WRITE': 9
+    }
+    
+    # Generate edge type one-hot
+    relvec=torch.nn.functional.one_hot(torch.arange(0, len(rel2id.keys())//2), num_classes=len(rel2id.keys())//2)
+
+    # Map different relation types to their one-hot encoding
+    rel2vec={}
+    for i in rel2id.keys():
+        if type(i) is not int:                  # skip int keys
+            rel2vec[i]= relvec[rel2id[i]-1]     # map relation type to vector
+            rel2vec[relvec[rel2id[i]-1]]=i      # reverse mapping
+
+    # Create the embeddings directory if it does not exist
+    if not os.path.exists(DEFAULT_EMB_DIR):
+        os.makedirs(DEFAULT_EMB_DIR)
+        logging.info(f"Created directory: {DEFAULT_EMB_DIR}")
+
+    # save the results (embeddings) to files
+    torch.save(node2higvec, DEFAULT_EMB_DIR + "node2higvec")
+    torch.save(rel2vec, DEFAULT_EMB_DIR + "rel2vec")
+
+    # -----------------------------------------------------------------------------------------------
 
 
 # --------------------------------- CLI -----------------------------------
