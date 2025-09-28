@@ -340,7 +340,7 @@ def run(args):
             RESTART IDENTITY CASCADE;
         """
         
-        logging.info(f"truncate sql: {reset_sql}")
+        #logging.info(f"truncate sql: {reset_sql}")
 
         try:
             cur.execute(reset_sql)
@@ -678,153 +678,156 @@ def run(args):
     #
     # --------------------------------------------------------------------------
     
-    print("\r\nBuilding node2id catalog from node tables...")
+    if not args.skip_node2ids:
 
-    node_list={}
+        print("\r\nbuilding node2id catalog from node tables...")
 
-    ##################################################################################################
-    cur.execute("""
-        SELECT * FROM file_node_table
-    """)
-    file_nodes = cur.fetchall()    
-    
-    for i in file_nodes:    
-        node_list[i[1]]=["file",i[-1]]
-    
-    file_uuid2hash={}
-    for i in file_nodes:
-        file_uuid2hash[i[0]]=i[1]
-    
-    ##################################################################################################
-    cur.execute("""
-        SELECT * FROM subject_node_table
-    """)
-    subject_nodes = cur.fetchall()
-    
-    for i in subject_nodes:
-        node_list[i[1]]=["subject",i[-1]]
+        node_list={}
 
-    subject_uuid2hash={}
-    for i in subject_nodes:
-        subject_uuid2hash[i[0]]=i[1]
-    
-    ##################################################################################################
-    cur.execute("""
-        SELECT * FROM netflow_node_table
-    """)
-    netflow_nodes = cur.fetchall()
-    
-    for i in netflow_nodes:
-        node_list[i[1]]=["netflow",i[-2]+":"+i[-1]]
-    
-    net_uuid2hash={}
-    for i in netflow_nodes:
-        net_uuid2hash[i[0]]=i[1]
-    
-    ##################################################################################################
-    node_list_database=[]
-    node_index=0
-    for i in node_list:
-        node_list_database.append([i]+node_list[i]+[node_index])
-        node_index+=1
-    
-    logging.info("New node2id rows to insert: %d", len(node_list_database))
+        ##################################################################################################
+        cur.execute("""
+            SELECT * FROM file_node_table
+        """)
+        file_nodes = cur.fetchall()    
+        
+        for i in file_nodes:    
+            node_list[i[1]]=["file",i[-1]]
+        
+        file_uuid2hash={}
+        for i in file_nodes:
+            file_uuid2hash[i[0]]=i[1]
+        
+        ##################################################################################################
+        cur.execute("""
+            SELECT * FROM subject_node_table
+        """)
+        subject_nodes = cur.fetchall()
+        
+        for i in subject_nodes:
+            node_list[i[1]]=["subject",i[-1]]
 
-    if node_list_database:
-        sql = '''insert into node2id values %s'''
+        subject_uuid2hash={}
+        for i in subject_nodes:
+            subject_uuid2hash[i[0]]=i[1]
+        
+        ##################################################################################################
+        cur.execute("""
+            SELECT * FROM netflow_node_table
+        """)
+        netflow_nodes = cur.fetchall()
+        
+        for i in netflow_nodes:
+            node_list[i[1]]=["netflow",i[-2]+":"+i[-1]]
+        
+        net_uuid2hash={}
+        for i in netflow_nodes:
+            net_uuid2hash[i[0]]=i[1]
+        
+        ##################################################################################################
+        node_list_database=[]
+        node_index=0
+        for i in node_list:
+            node_list_database.append([i]+node_list[i]+[node_index])
+            node_index+=1
+        
+        logging.info("New node2id rows to insert: %d", len(node_list_database))
 
-        execute_values(cur, sql, node_list_database, page_size=10000)
-        conn.commit()  
-        logging.info(f"Successfully inserted {len(node_list_database)} rows in node2id table.")
+        if node_list_database:
+            sql = '''insert into node2id values %s'''
+
+            execute_values(cur, sql, node_list_database, page_size=10000)
+            conn.commit()  
+            logging.info(f"Successfully inserted {len(node_list_database)} rows in node2id table.")
+        else:
+            logging.warning("No rows to insert; skipping database write.")
+
+        del node_list_database
+        gc.collect()
     else:
-        logging.warning("No rows to insert; skipping database write.")
+        logging.warning("skipped node2id parsing...")
 
-    del node_list_database
-    gc.collect()
-    
-    ##################################################################################################
-    # Constructing the map for nodeid to msg
-    sql="select * from node2id ORDER BY index_id;"
-    cur.execute(sql)
-    rows = cur.fetchall()
 
-    nodeid2msg={}  # nodeid => msg and node hash => nodeid
-    for i in rows:
-        nodeid2msg[i[0]]=i[-1]
-        nodeid2msg[i[-1]]={i[1]:i[2]}
+    # -----------------------------------------------------------------------------------------------
+    #  ------------------------------------- event table data ---------------------------------------
+    #
 
-    #print(nodeid2msg)
-    ##################################################################################################
-    
-    include_edge_type=[
-        'EVENT_CLOSE',
-        'EVENT_OPEN',
-        'EVENT_READ',
-        'EVENT_WRITE',
-        'EVENT_EXECUTE',
-        'EVENT_RECVFROM',
-        'EVENT_RECVMSG',
-        'EVENT_SENDMSG',
-        'EVENT_SENDTO',
-    ]
-    
-    datalist=[]
-    edge_type=set()
-    reverse=["EVENT_RECVFROM","EVENT_RECVMSG","EVENT_READ"]        
+    if not args.skip_events:
 
-    for file in tqdm(fileList):
+        print("\r\nparsing event_table info...")
 
-        file_name = filePath + file 
-        logging.info(f"processing file: {file_name}...")
+        # Constructing the map for nodeid to msg
+        sql="select * from node2id ORDER BY index_id;"
+        cur.execute(sql)
+        rows = cur.fetchall()
 
-        with open(file_name, "r") as f:
+        nodeid2msg={}  # nodeid => msg and node hash => nodeid
+        for i in rows:
+            nodeid2msg[i[0]]=i[-1]
+            nodeid2msg[i[-1]]={i[1]:i[2]}
 
-            # Get the total number of lines in the file for the progress bar
-            total_lines_in_file = sum(1 for _ in f)
-            f.seek(0)  # Reset file pointer to the beginning
-            
-            # Create a progress bar for the lines
-            with tqdm(total=total_lines_in_file, desc="Processing lines", leave=False) as line_progress:
+        #print(nodeid2msg)
+        
+        include_edge_type=[
+            'EVENT_CLOSE',
+            'EVENT_OPEN',
+            'EVENT_READ',
+            'EVENT_WRITE',
+            'EVENT_EXECUTE',
+            'EVENT_RECVFROM',
+            'EVENT_RECVMSG',
+            'EVENT_SENDMSG',
+            'EVENT_SENDTO',
+        ]
+        
+        datalist=[]
+        edge_type=set()
+        reverse=["EVENT_RECVFROM","EVENT_RECVMSG","EVENT_READ"]        
 
-                for line in (f):
-                    
-                    line_progress.update(1)  # Update the progress bar for each line
+        for file in tqdm(fileList):
 
-                    if '{"datum":{"com.bbn.tc.schema.avro.cdm20.Event"' in line:
-    #                     print(line)
-                        subject_uuid=re.findall('"subject":{"com.bbn.tc.schema.avro.cdm20.UUID":"(.*?)"',line)
-                        predicateObject_uuid=re.findall('"predicateObject":{"com.bbn.tc.schema.avro.cdm20.UUID":"(.*?)"',line)
-                        if len(subject_uuid) >0 and len(predicateObject_uuid)>0:
-                            if subject_uuid[0] in subject_uuid2hash\
-                            and (predicateObject_uuid[0] in file_uuid2hash or predicateObject_uuid[0] in net_uuid2hash):
-                                relation_type=re.findall('"type":"(.*?)"',line)[0]
-                                time_rec=re.findall('"timestampNanos":(.*?),',line)[0]
-                                time_rec=int(time_rec) 
-                                subjectId=subject_uuid2hash[subject_uuid[0]]
-                                if predicateObject_uuid[0] in file_uuid2hash:
-                                    objectId=file_uuid2hash[predicateObject_uuid[0]]
-                                else:
-                                    objectId=net_uuid2hash[predicateObject_uuid[0]]
-    #                                 print(line)
-                                edge_type.add(relation_type)
-                                if relation_type in reverse:
-                                    datalist.append([objectId,nodeid2msg[objectId],relation_type,subjectId,nodeid2msg[subjectId],time_rec])
-                                else:
-                                    datalist.append([subjectId,nodeid2msg[subjectId],relation_type,objectId,nodeid2msg[objectId],time_rec])
+            file_name = filePath + file 
+            logging.info(f"processing file: {file_name}...")
 
-    logging.info(f"Prepared {len(datalist)} rows for insert into event_table")
-    
-    bulk_insert(conn, 'event_table', datalist, batch_size=100000)
+            with open(file_name, "r") as f:
 
-    """
-    sql = '''insert into event_table
-                    values %s
-    '''
-    execute_values(cur,sql, datalist, page_size=50000)
-    conn.commit() 
-    logging.info(f"Successfully inserted {len(datalist)} rows into event_table.")
-    """
+                # Get the total number of lines in the file for the progress bar
+                total_lines_in_file = sum(1 for _ in f)
+                f.seek(0)  # Reset file pointer to the beginning
+                
+                # Create a progress bar for the lines
+                with tqdm(total=total_lines_in_file, desc="Processing lines", leave=False) as line_progress:
 
+                    for line in (f):
+                        
+                        line_progress.update(1)  # Update the progress bar for each line
+
+                        if '{"datum":{"com.bbn.tc.schema.avro.cdm20.Event"' in line:
+        #                     print(line)
+                            subject_uuid=re.findall('"subject":{"com.bbn.tc.schema.avro.cdm20.UUID":"(.*?)"',line)
+                            predicateObject_uuid=re.findall('"predicateObject":{"com.bbn.tc.schema.avro.cdm20.UUID":"(.*?)"',line)
+                            if len(subject_uuid) >0 and len(predicateObject_uuid)>0:
+                                if subject_uuid[0] in subject_uuid2hash\
+                                and (predicateObject_uuid[0] in file_uuid2hash or predicateObject_uuid[0] in net_uuid2hash):
+                                    relation_type=re.findall('"type":"(.*?)"',line)[0]
+                                    time_rec=re.findall('"timestampNanos":(.*?),',line)[0]
+                                    time_rec=int(time_rec) 
+                                    subjectId=subject_uuid2hash[subject_uuid[0]]
+                                    if predicateObject_uuid[0] in file_uuid2hash:
+                                        objectId=file_uuid2hash[predicateObject_uuid[0]]
+                                    else:
+                                        objectId=net_uuid2hash[predicateObject_uuid[0]]
+        #                                 print(line)
+                                    edge_type.add(relation_type)
+                                    if relation_type in reverse:
+                                        datalist.append([objectId,nodeid2msg[objectId],relation_type,subjectId,nodeid2msg[subjectId],time_rec])
+                                    else:
+                                        datalist.append([subjectId,nodeid2msg[subjectId],relation_type,objectId,nodeid2msg[objectId],time_rec])
+
+        logging.info(f"Prepared {len(datalist)} rows for insert into event_table")
+        
+        bulk_insert(conn, 'event_table', datalist, batch_size=100000)
+    else:
+        logging.warning("skipping event parsing...")
 
 
 
@@ -851,6 +854,8 @@ def make_parser():
     p.add_argument("--skip-netflows", action="store_true", help="Skip parsing/inserting netflow data")
     p.add_argument("--skip-processes", action="store_true", help="Skip parsing/inserting process data")
     p.add_argument("--skip-files", action="store_true", help="Skip parsing/inserting file data ")
+    p.add_argument("--skip-node2ids", action="store_true", help="Skip parsing/inserting node2id data ")
+    p.add_argument("--skip-events", action="store_true", help="Skip parsing/inserting event data ")
 
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
 
