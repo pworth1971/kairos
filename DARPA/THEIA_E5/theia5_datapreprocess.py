@@ -52,32 +52,34 @@ import json
 import hashlib
 import logging
 import time
-#import pytz
-
 from time import mktime
-from tqdm import tqdm
-
 from datetime import datetime, timezone
-
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Iterable
 
+from pathlib import Path
+from tqdm import tqdm
+import numpy as np
+import functools
+import networkx as nx
+import math
+
 import psycopg2
 from psycopg2 import extras as psql_extras
+from psycopg2.extras import execute_values
+from psycopg2.extras import DictCursor
 
-import numpy as np
-
-#import torch
-#from sklearn.feature_extraction import FeatureHasher
-#from torch_geometric.data import TemporalData
-
-
+import psycopg2.extras
+from contextlib import contextmanager
+import gc
+import logging
 
 
 # ----------------------------- Configuration -----------------------------
 
 DEFAULT_RAW_DIR = "/home/kairos/DARPA/THEIA_E5/"
 DEFAULT_OUT_DIR = "/home/kairos/DARPA/THEIA_E5/train_graph/"
+DEFAULT_SUB_DIR = "theia/"
 
 # Postgres connection defaults; can be overridden by env vars or CLI
 DEFAULT_PG = dict(
@@ -168,24 +170,90 @@ def stringtomd5(originstr):
     return signaturemd5.hexdigest() 
 
 
+
+
+# ------------------------------------ BULK INSERT Handling -----------------------------------------
+
+@contextmanager
+def get_db_cursor(conn):
+    """Context manager for database cursor with proper cleanup"""
+    cur = conn.cursor()
+    try:
+        yield cur
+    finally:
+        cur.close()
+
+
+def bulk_insert(conn, table_name, datalist, batch_size=100000):
+    """
+    Optimized bulk insert with batching, memory management, and performance tuning
+    """
+    logging.info(f"bulk_insert() - table_name:{table_name}, rows:{len(datalist)}")
+
+    if not datalist:
+        logging.warning("No rows to insert; skipping database write.")
+        return
+    
+    total_rows = len(datalist)
+
+    try:
+        with get_db_cursor(conn) as cur:
+            # Optimize PostgreSQL settings for bulk insert
+            cur.execute("SET synchronous_commit = OFF")
+            cur.execute("SET maintenance_work_mem = '1GB'")
+            
+            sql = f'''INSERT INTO {table_name} VALUES %s'''
+            inserted_count = 0
+            batch_num = 1
+            total_batches = (total_rows + batch_size - 1) // batch_size
+            
+            # Process in batches to manage memory
+            for i in range(0, total_rows, batch_size):
+                batch = datalist[i:i + batch_size]
+                current_batch_size = len(batch)
+                logging.info(f"Processing batch {batch_num}/{total_batches} "
+                             f"({current_batch_size:,} rows)")
+                
+                # Use execute_values with optimized parameters
+                psycopg2.extras.execute_values(
+                    cur, 
+                    sql, 
+                    batch,
+                    template=None,
+                    page_size=10000,  # Smaller page size for better memory usage
+                    fetch=False
+                )
+                inserted_count += current_batch_size
+                batch_num += 1
+                
+                # Commit every few batches to avoid long transactions
+                if batch_num % 5 == 0:  # Commit every 5 batches
+                    conn.commit()
+                    logging.info(f"Committed {inserted_count:,}/{total_rows:,} rows")
+                
+                # Force garbage collection to free memory
+                if batch_num % 10 == 0:
+                    gc.collect()
+            
+            # Final commit
+            conn.commit()
+            logging.info(f"Successfully inserted all {inserted_count:,} rows into {table_name}.")
+    
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Error during bulk insert: {e}")
+        raise
+    
+    finally:
+        # Clear the datalist to free memory
+        datalist.clear()
+        gc.collect()
+
+# ------------------------------------ BULK INSERT Handling -----------------------------------------
+
+
+
 # --------------------------------- Main ----------------------------------
-
-import functools
-import os
-import json
-import multiprocessing as mp
-import re
-import torch
-from tqdm import tqdm
-from torch_geometric.data import *
-import threading
-import networkx as nx
-import math
-
-
-import psycopg2
-from psycopg2.extras import DictCursor
-
 
 def run(args):
 
@@ -204,12 +272,15 @@ def run(args):
         logging.error("Raw directory does not exist: %s", raw_dir)
         sys.exit(1)
     
-    #
+
+    # --------------------------------------------------------------------------------
     # create fileList
     #
+
+    logging.info("creating fileList for parsing...")
     from pathlib import Path
 
-    root = Path.cwd() / "theia"
+    root = Path.cwd() / DEFAULT_SUB_DIR
     print(f"Scanning: {root.resolve()}")
 
     # Only files starting with 'ta1-theia' AND containing 'json' (case-insensitive)
@@ -218,11 +289,17 @@ def run(args):
         if p.is_file() and p.name.startswith("ta1-theia") and "json" in p.name.lower()
     )
 
-    print(f"Found {len(fileList)} files:")
+    logging.info(f"Found {len(fileList)} files")
     for name in fileList:
         print(name)
+    # --------------------------------------------------------------------------------
 
+
+    # --------------------------------------------------------------------------------
     # Connect to Postgres    
+
+    logging.info("\n\rconnecting to postgresql...")
+
     try:
         conn = psycopg2.connect(
             dbname="tc_e5_theia_dataset_db",
@@ -241,20 +318,43 @@ def run(args):
         raise
 
     cur = conn.cursor()
+    # --------------------------------------------------------------------------------
+    
 
-    filePath = raw_dir + '/theia/'
-    print("filePath:" + filePath)
+    # --------------------------------------------------------------------------------
+    # 
+    # Dataset Reset / Truncation 
+    #
 
+    if args.reset:
 
-    # Expect these to be defined already:
-    # - stringtomd5(s: str) -> 64-hex hash (your sha256 helper)
-    # - filePath: str or Path to the folder
-    # - fileList: list[str] of filenames inside filePath
-    # - netobj2hash: dict; netobjset: set
-    # If not, uncomment these:
-    # netobj2hash = {}
-    # netobjset = set()
-    # filePath = Path.cwd() / "raw_log"
+        logging.warning("RESET flag passed: truncating all tables in database %s", args.dbname)
+        
+        reset_sql = """
+            TRUNCATE TABLE
+                event_table,
+                file_node_table,
+                netflow_node_table,
+                subject_node_table,
+                node2id
+            RESTART IDENTITY CASCADE;
+        """
+        
+        logging.info(f"truncate sql: {reset_sql}")
+
+        try:
+            cur.execute(reset_sql)
+            conn.commit()
+            logging.info("All tables truncated successfully.")
+        except Exception as e:
+            logging.error("Failed to reset tables: %s", e)
+            conn.rollback()
+            sys.exit(1)
+
+    # --------------------------------------------------------------------------------    
+
+    filePath = raw_dir + DEFAULT_SUB_DIR
+    logging.info("filePath:" + filePath)
 
 
     # --------------------------------------------------------------------------
@@ -264,137 +364,149 @@ def run(args):
     #
     # --------------------------------------------------------------------------
 
-    import re, time
-    from pathlib import Path
+    if not args.skip_netflows:
 
-    print("\n\tparsing netflow info...\n")
+        print("\n\tparsing netflow info...\n")
 
-    PAT_NETFLOW = re.compile(
-        r'NetFlowObject":{"uuid":"(.*?)".*?'
-        r'"localAddress":{"string":"(.*?)"},"localPort":{"int":(.*?)},"remoteAddress":{"string":"(.*?)"},"remotePort":{"int":(.*?)}'
-    )
-
-    netobjset: set[str] = set()                 # tracks unique NetFlow hashes
-    netobj2hash: dict[str, list[str]] = {}      # uuid -> [hash, props] and hash -> uuid
-
-    tot_lines = tot_matches = tot_new = tot_errors = 0
-    tot_new_hashes = new_hashes = errors = 0
-    t0_all = time.perf_counter()
-
-    for file in tqdm(fileList):
-        fullPath = Path(filePath) / file
-        print(f"processing file: {fullPath} ...")
-        
-        lines = matches = errors = 0
-        before_unique = len(netobjset)
-        t0 = time.perf_counter()
-
-        with open(fullPath, "r", errors="ignore") as f:
-            for line in f:
-                lines += 1
-                if "NetFlowObject" not in line:
-                    continue
-
-                matches += 1
-                try:
-                    m = PAT_NETFLOW.search(line)
-                    if not m:
-                        # pattern not satisfied; skip
-                        continue
-
-                    nodeid, srcaddr, srcport, dstaddr, dstport = m.groups()
-                    nodeproperty = f"{srcaddr},{srcport},{dstaddr},{dstport}"
-                    hashstr = stringtomd5(nodeproperty)
-
-                    # Insert/overwrite maps (idempotent)
-                    netobj2hash[nodeid] = [hashstr, nodeproperty]
-                    netobj2hash[hashstr] = nodeid
-
-                    # Track unique netflow nodes (by hash)
-                    if hashstr not in netobjset:
-                        netobjset.add(hashstr)
-
-                except Exception:
-                    errors += 1
-                    # If you want, print the bad line once in a while:
-                    # if errors < 5: print("parse error on line:", line[:200])
-                    continue
-
-        elapsed = time.perf_counter() - t0
-        new_hashes = len(netobjset) - before_unique
-        rate = (lines / elapsed) if elapsed > 0 else 0.0
-
-        # Per-file summary
-        print(
-            f"[SUMMARY] {file} | lines={lines:,} | netflow_matches={matches:,} | "
-            f"new_unique_netflows={new_hashes:,} | parse_errors={errors:,} | "
-            f"time={elapsed:.1f}s | rate≈{rate:,.0f} lines/s"
+        PAT_NETFLOW = re.compile(
+            r'NetFlowObject":{"uuid":"(.*?)".*?'
+            r'"localAddress":{"string":"(.*?)"},"localPort":{"int":(.*?)},"remoteAddress":{"string":"(.*?)"},"remotePort":{"int":(.*?)}'
         )
 
-        # Accumulate totals
-        tot_lines += lines
-        tot_matches += matches
-        tot_new_hashes += new_hashes
-        tot_errors += errors
+        netobjset: set[str] = set()                 # tracks unique NetFlow hashes
+        netobj2hash: dict[str, list[str]] = {}      # uuid -> [hash, props] and hash -> uuid
 
-    # Grand total
-    all_elapsed = time.perf_counter() - t0_all
-    print(
-        f"[TOTAL] files={len(fileList)} | lines={tot_lines:,} | "
-        f"netflow_matches={tot_matches:,} | new_unique_netflows={tot_new_hashes:,} | "
-        f"parse_errors={tot_errors:,} | time={all_elapsed:.1f}s | "
-        f"rate≈{(tot_lines/all_elapsed if all_elapsed>0 else 0):,.0f} lines/s"
-    )
+        tot_lines = tot_matches = tot_new = tot_errors = 0
+        tot_new_hashes = new_hashes = errors = 0
+        t0_all = time.perf_counter()
 
+        for file in tqdm(fileList):
 
-    # Build rows for netflow_node_table and insert with execute_values.
+            fullPath = Path(filePath) / file
+            print(f"processing file: {fullPath} ...")
+            
+            lines = matches = errors = 0
+            before_unique = len(netobjset)
+            t0 = time.perf_counter()
 
-    from psycopg2.extras import execute_values  # <- fixes the "ex is not defined" error
+            with open(fullPath, "r", errors="ignore") as f:
 
-    # netobj2hash is expected to have BOTH:
-    #   uuid -> [hash_id, "src_addr,src_port,dst_addr,dst_port"]
-    #   hash_id -> uuid
-    # We only want the UUID keys (len != 64). Example row order matches the table:
-    #   (node_uuid, hash_id, src_addr, src_port, dst_addr, dst_port)
+                # Get the total number of lines in the file for the progress bar
+                total_lines_in_file = sum(1 for _ in f)
+                f.seek(0)  # Reset file pointer to the beginning
+                
+                # Create a progress bar for the lines
+                with tqdm(total=total_lines_in_file, desc="Processing lines", leave=False) as line_progress:
 
-    datalist = []
-    for k, v in netobj2hash.items():
-        # keep only UUID keys (hash keys are 64-hex chars)
-        if len(k) != 64:
-            hash_id = v[0]
-            try:
-                src_addr, src_port, dst_addr, dst_port = v[1].split(",")
-            except ValueError:
-                # Skip malformed nodeproperty strings
-                continue
-            datalist.append([k, hash_id, src_addr, src_port, dst_addr, dst_port])
+                    for line in f:
+                        lines += 1
+                        
+                        line_progress.update(1)  # Update the progress bar for each line
 
-    # Optional: peek at a few rows for sanity
-    from pprint import pprint
-    pprint(datalist[:3])
-    print(f"Prepared {len(datalist)} rows for insert into netflow_node_table")
+                        if "NetFlowObject" not in line:
+                            continue
 
-    if datalist:
-        # Always specify columns and a template; ON CONFLICT avoids duplicate PK errors
-        sql = """
-            INSERT INTO netflow_node_table
-                (node_uuid, hash_id, src_addr, src_port, dst_addr, dst_port)
-            VALUES %s
-            ON CONFLICT DO NOTHING
-        """
-        template = "(%s,%s,%s,%s,%s,%s)"
-        execute_values(cur, sql, datalist, template=template, page_size=10000)
+                        matches += 1
+                        try:
+                            m = PAT_NETFLOW.search(line)
+                            if not m:
+                                # pattern not satisfied; skip
+                                continue
 
-        # Commit using the correct connection variable (conn or connect)
-        # If your variable is named `connect`, either rename it to conn or call connect.commit()
-        conn.commit()
-        print("Insert committed.")
+                            nodeid, srcaddr, srcport, dstaddr, dstport = m.groups()
+                            nodeproperty = f"{srcaddr},{srcport},{dstaddr},{dstport}"
+                            hashstr = stringtomd5(nodeproperty)
+
+                            # Insert/overwrite maps (idempotent)
+                            netobj2hash[nodeid] = [hashstr, nodeproperty]
+                            netobj2hash[hashstr] = nodeid
+
+                            # Track unique netflow nodes (by hash)
+                            if hashstr not in netobjset:
+                                netobjset.add(hashstr)
+
+                        except Exception:
+                            errors += 1
+                            # If you want, print the bad line once in a while:
+                            # if errors < 5: print("parse error on line:", line[:200])
+                            continue
+
+            elapsed = time.perf_counter() - t0
+            new_hashes = len(netobjset) - before_unique
+            rate = (lines / elapsed) if elapsed > 0 else 0.0
+
+            # Per-file summary
+            print(
+                f"[SUMMARY] {file} | lines={lines:,} | netflow_matches={matches:,} | "
+                f"new_unique_netflows={new_hashes:,} | parse_errors={errors:,} | "
+                f"time={elapsed:.1f}s | rate≈{rate:,.0f} lines/s"
+            )
+
+            # Accumulate totals
+            tot_lines += lines
+            tot_matches += matches
+            tot_new_hashes += new_hashes
+            tot_errors += errors
+
+        # Grand total
+        all_elapsed = time.perf_counter() - t0_all
+        print(
+            f"[TOTAL] files={len(fileList)} | lines={tot_lines:,} | "
+            f"netflow_matches={tot_matches:,} | new_unique_netflows={tot_new_hashes:,} | "
+            f"parse_errors={tot_errors:,} | time={all_elapsed:.1f}s | "
+            f"rate≈{(tot_lines/all_elapsed if all_elapsed>0 else 0):,.0f} lines/s"
+        )
+
+        #
+        # Build rows for netflow_node_table and insert with execute_values.
+        #
+
+        # netobj2hash is expected to have BOTH:
+        #   uuid -> [hash_id, "src_addr,src_port,dst_addr,dst_port"]
+        #   hash_id -> uuid
+        # We only want the UUID keys (len != 64). Example row order matches the table:
+        #   (node_uuid, hash_id, src_addr, src_port, dst_addr, dst_port)
+
+        datalist = []
+        for k, v in netobj2hash.items():
+            # keep only UUID keys (hash keys are 64-hex chars)
+            if len(k) != 64:
+                hash_id = v[0]
+                try:
+                    src_addr, src_port, dst_addr, dst_port = v[1].split(",")
+                except ValueError:
+                    # Skip malformed nodeproperty strings
+                    continue
+                datalist.append([k, hash_id, src_addr, src_port, dst_addr, dst_port])
+
+        # Optional: peek at a few rows for sanity
+        #from pprint import pprint
+        #pprint(datalist[:3])
+        logging.info(f"Prepared {len(datalist)} rows for insert into netflow_node_table")
+
+        if datalist:
+            # Always specify columns and a template; ON CONFLICT avoids duplicate PK errors
+            sql = """
+                INSERT INTO netflow_node_table
+                    (node_uuid, hash_id, src_addr, src_port, dst_addr, dst_port)
+                VALUES %s
+                ON CONFLICT DO NOTHING
+            """
+            template = "(%s,%s,%s,%s,%s,%s)"
+            execute_values(cur, sql, datalist, template=template, page_size=10000)
+
+            # Commit using the correct connection variable (conn or connect)
+            # If your variable is named `connect`, either rename it to conn or call connect.commit()
+            conn.commit()
+            logging.info(f"Successfully inserted {len(datalist)} rows into netflow_node_table.")
+        else:
+            logging.warning("No rows to insert; skipping database write.")
+
+        del netobj2hash
+        del datalist
+        gc.collect()
     else:
-        print("No rows to insert; skipping database write.")
-
-
-    # del netobj2hash
-    # del datalist
+        logging.warning("\r--skipping netflow info parsing--")
 
 
     # --------------------------------------------------------------------------
@@ -404,107 +516,317 @@ def run(args):
     #
     # --------------------------------------------------------------------------
 
-    print("\n\tparsing process info...\n")
-    
-    scusess_count=0
-    fail_count=0
-    subject_objset=set()
-    subject_obj2hash={}# 
+    if not args.skip_processes:
 
-    for file in tqdm(fileList):
-        fullPath = Path(filePath) / file
-        print(f"processing file: {fullPath} ...")
-
-        with open(fullPath, "r") as f:
-#             for line in tqdm(f): 
-            for line in (f):
-                if "schema.avro.cdm20.Subject" in line:
-#                     print(line)
-                    subject_uuid=re.findall('avro.cdm20.Subject":{"uuid":"(.*?)",(.*?)"path":"(.*?)"',line)
-#                
-                    try:
-#                         (subject_uuid[0][-1])
-                        subject_obj2hash[subject_uuid[0][0]]=subject_uuid[0][-1]
-                        scusess_count+=1
-                    except:
-                        try:
-                            subject_obj2hash[subject_uuid[0][0]]="null"
-                        except:
-                            pass
-#                             print(line)
-#                         print(line)                        
-                        fail_count+=1
-
-
-    procdatalist=[]
-    for i in subject_obj2hash.keys():
-        if len(i)!=64:
-            procdatalist.append([i]+[stringtomd5(subject_obj2hash[i]),subject_obj2hash[i]])
-
-    # Optional: peek at a few rows for sanity
-    pprint(procdatalist[:3])
-    print(f"Prepared {len(procdatalist)} rows for insert into subject_node_table")
-
-    if procdatalist:
-        # Always specify columns and a template; ON CONFLICT avoids duplicate PK errors
-        sql = '''
-            INSERT INTO subject_node_table
-                VALUES %s
-            '''
-        execute_values(cur,sql, procdatalist, page_size=10000)
-        conn.commit()
-        print("Insert committed.")
-    else:
-        print("No rows to insert; skipping database write.")
-
-
-    # --------------------------------------------------------------------------
-    # ------------------------------- File -------------------------------------
-    #
-    #
-    # --------------------------------------------------------------------------
-
-    print("\n\tparsing file info...\n")
-
-    file_node=set()
-    file_obj2hash={}
-    fail_count=0
-    for file in tqdm(fileList):
+        print("\n\tparsing process info from fileList...\n")
         
-        fullPath = Path(filePath) / file
-        print(f"processing file: {fullPath} ...")
+        scusess_count=0
+        fail_count=0
+        subject_objset=set()
+        subject_obj2hash={}# 
 
-        with open(fullPath, "r") as f:
-            for line in f:
-                if "avro.cdm20.FileObject" in line:
-#                     print(line)
-                    Object_uuid=re.findall('avro.cdm20.FileObject":{"uuid":"(.*?)",(.*?)"filename":"(.*?)"',line) 
-                    try:
-                        file_node.add(Object_uuid[0])
-                        file_obj2hash[Object_uuid[0][0]]=Object_uuid[0][-1]
-                    except:
-                        fail_count+=1
-#                         print(line)
+        for file in tqdm(fileList):
+            fullPath = Path(filePath) / file
+            logging.info(f"processing file: {fullPath} ...")
 
-    filedatalist=[]
-    for i in file_obj2hash.keys():
-        if len(i)!=64:
-            filedatalist.append([i]+[stringtomd5(file_obj2hash[i]),file_obj2hash[i]])
+            with open(fullPath, "r") as f:
+                # Get the total number of lines in the file for the progress bar
+                total_lines_in_file = sum(1 for _ in f)
+                f.seek(0)  # Reset file pointer to the beginning
+                
+                # Create a progress bar for the lines
+                with tqdm(total=total_lines_in_file, desc="Processing lines", leave=False) as line_progress:
 
-    # Optional: peek at a few rows for sanity
-    pprint(filedatalist[:3])
-    print(f"Prepared {len(filedatalist)} rows for insert into file_node_table")
+                    for line in (f):
 
-    if filedatalist:
-        # Always specify columns and a template; ON CONFLICT avoids duplicate PK errors
-        sql = '''insert into file_node_table
-                            values %s
+                        line_progress.update(1)  # Update the progress bar for each line
+
+                        if "schema.avro.cdm20.Subject" in line:
+        #                     print(line)
+                            subject_uuid=re.findall('avro.cdm20.Subject":{"uuid":"(.*?)",(.*?)"path":"(.*?)"',line)
+        #                
+                            try:
+        #                         (subject_uuid[0][-1])
+                                subject_obj2hash[subject_uuid[0][0]]=subject_uuid[0][-1]
+                                scusess_count+=1
+                            except:
+                                try:
+                                    subject_obj2hash[subject_uuid[0][0]]="null"
+                                except:
+                                    pass
+        #                             print(line)
+        #                         print(line)                        
+                                fail_count+=1
+
+        procdatalist=[]
+        for i in subject_obj2hash.keys():
+            if len(i)!=64:
+                procdatalist.append([i]+[stringtomd5(subject_obj2hash[i]),subject_obj2hash[i]])
+
+        # Optional: peek at a few rows for sanity
+        #pprint(procdatalist[:3])
+        logging.info(f"Prepared {len(procdatalist)} rows for insert into subject_node_table")
+
+        if procdatalist:
+            # Always specify columns and a template; ON CONFLICT avoids duplicate PK errors
+            sql = '''
+                INSERT INTO subject_node_table
+                    VALUES %s
                 '''
-        execute_values(cur,sql, filedatalist, page_size=10000)
-        conn.commit() 
-        print("Insert committed.")
+            execute_values(cur,sql, procdatalist, page_size=10000)
+            conn.commit()
+            logging.info(f"Successfully inserted {len(procdatalist)} rows in subject_node_table.")
+        else:
+            logging.warning("No rows to insert; skipping database write.")
+
+        del procdatalist
+        gc.collect()
     else:
-        print("No rows to insert; skipping database write.")
+        logging.warning("\r--skipping process info parsing--")
+
+
+    # --------------------------------------------------------------------------
+    # ----------------------------- File Data ----------------------------------
+    #
+    #
+    # --------------------------------------------------------------------------
+
+    if not args.skip_files:
+
+        print("\n\tparsing file info...\n")
+
+        file_node=set()
+        file_obj2hash={}
+        fail_count=0
+
+        for file in tqdm(fileList):    
+
+            fullPath = Path(filePath) / file
+            logging.info(f"processing file: {fullPath} ...")
+
+            with open(fullPath, "r") as f:
+
+                # Get the total number of lines in the file for the progress bar
+                total_lines_in_file = sum(1 for _ in f)
+                f.seek(0)  # Reset file pointer to the beginning
+                
+                # Create a progress bar for the lines
+                with tqdm(total=total_lines_in_file, desc="Processing lines", leave=False) as line_progress:
+
+                    for line in f:
+
+                        line_progress.update(1)  # Update the progress bar for each line
+
+                        if "avro.cdm20.FileObject" in line:
+        #                     print(line)
+                            Object_uuid=re.findall('avro.cdm20.FileObject":{"uuid":"(.*?)",(.*?)"filename":"(.*?)"',line) 
+                            try:
+                                file_node.add(Object_uuid[0])
+                                file_obj2hash[Object_uuid[0][0]]=Object_uuid[0][-1]
+                            except:
+                                fail_count+=1
+        #                         print(line)
+        
+        filedatalist=[]
+        for i in file_obj2hash.keys():
+            if len(i)!=64:
+                filedatalist.append([i]+[stringtomd5(file_obj2hash[i]),file_obj2hash[i]])
+
+        # Optional: peek at a few rows for sanity
+        #pprint(filedatalist[:3])
+        logging.info(f"Prepared {len(filedatalist)} rows for insert into file_node_table")
+
+        if filedatalist:
+            sql = '''insert into file_node_table
+                                values %s
+                    '''
+            execute_values(cur, sql, filedatalist, page_size=10000)
+            conn.commit() 
+            logging.info(f"Successfully inserted {len(filedatalist)} rows into file_node_table.")
+        else:
+            logging.warning("No rows to insert; skipping database write.")
+
+        del filedatalist
+        gc.collect()
+    
+    else:
+        logging.warning("\r--skipping file info parsing--")
+
+    # --------------------------------------------------------------------------
+    #
+    # --------------------------- Event / Node2ID Data --------------------------
+    #
+    # Build a unified node catalog (node2id):
+    #   - Each row links a stable node hash_id to:
+    #       * node_type  ∈ {"file","subject","netflow"}
+    #       * node_value (human-friendly attribute; e.g., filename or "ip:port")
+    #       * index_id   (dense integer id for graph building)
+    #
+    # Design notes:
+    #   - We read only the columns we need (no SELECT *) for clarity and stability.
+    #   - We make the insert idempotent via ON CONFLICT DO NOTHING.
+    #   - We assign fresh index_id values *only* to hashes not already in node2id.
+    #   - We also construct convenience dicts:
+    #       file_uuid2hash, subject_uuid2hash, net_uuid2hash
+    #       (uuid → hash_id) to translate THEIA UUIDs during edge construction.
+    # --------------------------------------------------------------------------
+
+    
+    # --------------------------------------------------------------------------
+    #
+    # Generate the data for node2id table
+    #
+    # --------------------------------------------------------------------------
+    
+    print("\r\nBuilding node2id catalog from node tables...")
+
+    node_list={}
+
+    ##################################################################################################
+    cur.execute("""
+        SELECT * FROM file_node_table
+    """)
+    file_nodes = cur.fetchall()    
+    
+    for i in file_nodes:    
+        node_list[i[1]]=["file",i[-1]]
+    
+    file_uuid2hash={}
+    for i in file_nodes:
+        file_uuid2hash[i[0]]=i[1]
+    
+    ##################################################################################################
+    cur.execute("""
+        SELECT * FROM subject_node_table
+    """)
+    subject_nodes = cur.fetchall()
+    
+    for i in subject_nodes:
+        node_list[i[1]]=["subject",i[-1]]
+
+    subject_uuid2hash={}
+    for i in subject_nodes:
+        subject_uuid2hash[i[0]]=i[1]
+    
+    ##################################################################################################
+    cur.execute("""
+        SELECT * FROM netflow_node_table
+    """)
+    netflow_nodes = cur.fetchall()
+    
+    for i in netflow_nodes:
+        node_list[i[1]]=["netflow",i[-2]+":"+i[-1]]
+    
+    net_uuid2hash={}
+    for i in netflow_nodes:
+        net_uuid2hash[i[0]]=i[1]
+    
+    ##################################################################################################
+    node_list_database=[]
+    node_index=0
+    for i in node_list:
+        node_list_database.append([i]+node_list[i]+[node_index])
+        node_index+=1
+    
+    logging.info("New node2id rows to insert: %d", len(node_list_database))
+
+    if node_list_database:
+        sql = '''insert into node2id values %s'''
+
+        execute_values(cur, sql, node_list_database, page_size=10000)
+        conn.commit()  
+        logging.info(f"Successfully inserted {len(node_list_database)} rows in node2id table.")
+    else:
+        logging.warning("No rows to insert; skipping database write.")
+
+    del node_list_database
+    gc.collect()
+    
+    ##################################################################################################
+    # Constructing the map for nodeid to msg
+    sql="select * from node2id ORDER BY index_id;"
+    cur.execute(sql)
+    rows = cur.fetchall()
+
+    nodeid2msg={}  # nodeid => msg and node hash => nodeid
+    for i in rows:
+        nodeid2msg[i[0]]=i[-1]
+        nodeid2msg[i[-1]]={i[1]:i[2]}
+
+    #print(nodeid2msg)
+    ##################################################################################################
+    
+    include_edge_type=[
+        'EVENT_CLOSE',
+        'EVENT_OPEN',
+        'EVENT_READ',
+        'EVENT_WRITE',
+        'EVENT_EXECUTE',
+        'EVENT_RECVFROM',
+        'EVENT_RECVMSG',
+        'EVENT_SENDMSG',
+        'EVENT_SENDTO',
+    ]
+    
+    datalist=[]
+    edge_type=set()
+    reverse=["EVENT_RECVFROM","EVENT_RECVMSG","EVENT_READ"]        
+
+    for file in tqdm(fileList):
+
+        file_name = filePath + file 
+        logging.info(f"processing file: {file_name}...")
+
+        with open(file_name, "r") as f:
+
+            # Get the total number of lines in the file for the progress bar
+            total_lines_in_file = sum(1 for _ in f)
+            f.seek(0)  # Reset file pointer to the beginning
+            
+            # Create a progress bar for the lines
+            with tqdm(total=total_lines_in_file, desc="Processing lines", leave=False) as line_progress:
+
+                for line in (f):
+                    
+                    line_progress.update(1)  # Update the progress bar for each line
+
+                    if '{"datum":{"com.bbn.tc.schema.avro.cdm20.Event"' in line:
+    #                     print(line)
+                        subject_uuid=re.findall('"subject":{"com.bbn.tc.schema.avro.cdm20.UUID":"(.*?)"',line)
+                        predicateObject_uuid=re.findall('"predicateObject":{"com.bbn.tc.schema.avro.cdm20.UUID":"(.*?)"',line)
+                        if len(subject_uuid) >0 and len(predicateObject_uuid)>0:
+                            if subject_uuid[0] in subject_uuid2hash\
+                            and (predicateObject_uuid[0] in file_uuid2hash or predicateObject_uuid[0] in net_uuid2hash):
+                                relation_type=re.findall('"type":"(.*?)"',line)[0]
+                                time_rec=re.findall('"timestampNanos":(.*?),',line)[0]
+                                time_rec=int(time_rec) 
+                                subjectId=subject_uuid2hash[subject_uuid[0]]
+                                if predicateObject_uuid[0] in file_uuid2hash:
+                                    objectId=file_uuid2hash[predicateObject_uuid[0]]
+                                else:
+                                    objectId=net_uuid2hash[predicateObject_uuid[0]]
+    #                                 print(line)
+                                edge_type.add(relation_type)
+                                if relation_type in reverse:
+                                    datalist.append([objectId,nodeid2msg[objectId],relation_type,subjectId,nodeid2msg[subjectId],time_rec])
+                                else:
+                                    datalist.append([subjectId,nodeid2msg[subjectId],relation_type,objectId,nodeid2msg[objectId],time_rec])
+
+    logging.info(f"Prepared {len(datalist)} rows for insert into event_table")
+    
+    bulk_insert(conn, 'event_table', datalist, batch_size=100000)
+
+    """
+    sql = '''insert into event_table
+                    values %s
+    '''
+    execute_values(cur,sql, datalist, page_size=50000)
+    conn.commit() 
+    logging.info(f"Successfully inserted {len(datalist)} rows into event_table.")
+    """
+
+
+
 
 
 # --------------------------------- CLI -----------------------------------
@@ -526,12 +848,18 @@ def make_parser():
     p.add_argument("--hash-dim", type=int, default=16, help="FeatureHasher output dimension (default: 16)")
 
     # Phase toggles
-    p.add_argument("--skip-nodes", action="store_true", help="Skip parsing/inserting nodes")
-    p.add_argument("--skip-events", action="store_true", help="Skip event ingestion")
-    p.add_argument("--skip-feats", action="store_true", help="Skip featurization (expects existing artifacts)")
-    p.add_argument("--skip-graphs", action="store_true", help="Skip temporal graph generation")
+    p.add_argument("--skip-netflows", action="store_true", help="Skip parsing/inserting netflow data")
+    p.add_argument("--skip-processes", action="store_true", help="Skip parsing/inserting process data")
+    p.add_argument("--skip-files", action="store_true", help="Skip parsing/inserting file data ")
 
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
+
+    p.add_argument(
+        "-r", "--reset",
+        action="store_true",
+        help="Reset (truncate) all known tables in the database before processing"
+    )
+
     return p
 
 if __name__ == "__main__":
