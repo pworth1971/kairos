@@ -1,46 +1,4 @@
 #!/usr/bin/env python3
-"""
-THEIA E5 Data Preprocessing → Postgres → Temporal Graphs (PyG)
-
-This script is a cleaned, well‑commented version of a Jupyter notebook that:
-  1) Parses THEIA E5 JSON log shards (line‑delimited JSON-ish) to extract:
-       - NetFlowObject nodes
-       - Subject (process) nodes
-       - FileObject nodes
-       - Event edges (excluding EVENT_FLOWS_TO)
-  2) Loads nodes/edges into a Postgres database.
-  3) Builds a node2id table.
-  4) Featurizes nodes using hierarchical string hashing.
-  5) Generates per‑day TemporalData graphs and saves them.
-
-It is designed for very large inputs: files are streamed line‑by‑line and DB
-inserts are batched.
-
-
-USAGE (examples)
----------------
-# Minimal, assuming defaults and env vars:
-python theia5_datapreprocess.py --raw-dir /raw_log --out-dir ./train_graph
-
-# With DB parameters:
-PGDATABASE=tc_theia_dataset_db PGUSER=postgres PGPASSWORD=passwd PGHOST=/var/run/postgresql PGPORT=5432 python theia5_datapreprocess_clean.py --raw-dir /home/kairos/DARPA/THEIA_E5/raw_log
-
-# Only run specific phases:
-python theia3_datapreprocess.py --raw-dir /raw_log --skip-events --skip-graphs
-
-
-NOTES
------
-- The original code used a helper named stringtomd5 but implemented SHA‑256;
-  we keep SHA‑256 because the pipeline expects 64‑hex hashes.
-- Regexes are compiled once. Lines that don't match are skipped.
-- Table schemas are created if missing (idempotent).
-"""
-
-
-
-# ----------------------------- Imports -----------------------------
-
 
 from __future__ import annotations
 
@@ -52,6 +10,7 @@ import json
 import hashlib
 import logging
 import time
+import pytz
 from time import mktime
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -86,18 +45,22 @@ from sklearn import preprocessing
 DEFAULT_RAW_DIR = "/home/kairos/DARPA/THEIA_E5/"
 DEFAULT_OUT_DIR = "/home/kairos/DARPA/THEIA_E5/train_graph/"
 DEFAULT_SUB_DIR = "theia/"
+
 DEFAULT_EMB_DIR = "./embeddings/"
+
+DEFAULT_TRAIN_GRAPHS_DIR = "./train_graphs/"
 
 NODEID2MSG_FILE = "nodeid2msg.pkl"  # File to save the nodeid2msg data
 
-# Postgres connection defaults; can be overridden by env vars or CLI
+# Postgres connection defaults; hardcoded parameters
 DEFAULT_PG = dict(
-    database=os.environ.get("PGDATABASE", "tc_e5_theia_dataset_db"),
-    host=os.environ.get("PGHOST", "/var/run/postgresql/"),
-    user=os.environ.get("PGUSER", "postgres"),
-    password=os.environ.get("PGPASSWORD", "Rafter9876!@"),
-    port=os.environ.get("PGPORT", "5432"),
+    database="tc_e5_theia_dataset_db",
+    host="/var/run/postgresql/",
+    user="postgres",
+    password="Rafter9876!@",
+    port="5432",
 )
+
 
 # ------------------------- Helpers: hashing & time ------------------------
 
@@ -193,7 +156,7 @@ def get_db_cursor(conn):
         cur.close()
 
 
-def bulk_insert(conn, table_name, datalist, batch_size=100000):
+def bulk_insert(conn, db_name, table_name, datalist, batch_size=500000):
     """
     Optimized bulk insert with batching, memory management, and performance tuning
     """
@@ -207,6 +170,7 @@ def bulk_insert(conn, table_name, datalist, batch_size=100000):
 
     try:
         with get_db_cursor(conn) as cur:
+
             # Optimize PostgreSQL settings for bulk insert
             cur.execute("SET synchronous_commit = OFF")
             cur.execute("SET maintenance_work_mem = '1GB'")
@@ -236,7 +200,7 @@ def bulk_insert(conn, table_name, datalist, batch_size=100000):
                 batch_num += 1
                 
                 # Commit every few batches to avoid long transactions
-                if batch_num % 5 == 0:  # Commit every 5 batches
+                if batch_num % 5 == 0:                  # Commit every 5 batches
                     conn.commit()
                     logging.info(f"Committed {inserted_count:,}/{total_rows:,} rows")
                 
@@ -338,9 +302,9 @@ def run(args):
         )
         cur = conn.cursor(cursor_factory=DictCursor)
         cur.execute("SELECT current_database(), inet_server_addr(), inet_server_port()")
-        print(cur.fetchone())
+        logging.info(cur.fetchone())
     except psycopg2.Error as e:
-        print("PSQL error:", e.pgcode, e)
+        logging.error("PSQL error:", e.pgcode, e)
         raise
 
     cur = conn.cursor()
@@ -517,6 +481,8 @@ def run(args):
                 VALUES %s
                 ON CONFLICT DO NOTHING
             """
+            logging.info(f"sql: {sql}")
+
             template = "(%s,%s,%s,%s,%s,%s)"
             execute_values(cur, sql, datalist, template=template, page_size=10000)
 
@@ -848,7 +814,7 @@ def run(args):
 
         logging.info(f"Prepared {len(datalist)} rows for insert into event_table")
         
-        bulk_insert(conn, 'event_table', datalist, batch_size=100000)
+        bulk_insert(conn, args.dbname, 'event_table', datalist, batch_size=500000)
 
         # Save nodeid2msg to disk for future runs
         save_nodeid2msg(nodeid2msg)
@@ -861,128 +827,197 @@ def run(args):
     # -------------------------------------- featurization ------------------------------------------
     #
 
-    # Initialize FeatureHasher for string and dictionary inputs
-    FH_string=FeatureHasher(n_features=16,input_type="string")
-    FH_dict=FeatureHasher(n_features=16,input_type="dict")
+    if not args.skip_embeddings:
 
-    # Load nodeid2msg from disk or build it from the database
-    nodeid2msg = load_nodeid2msg()
+        print("\r\nbuilding embeddings (aka featurization)...")
 
-    def path2higlist(p):
-        """Convert a file path into a hierarchical list."""
-        l=[]
-        spl=p.strip().split('/')
-        for i in spl:
-            if len(l)!=0:
-                l.append(l[-1]+'/'+i)
+        # Initialize FeatureHasher for string and dictionary inputs
+        FH_string=FeatureHasher(n_features=16,input_type="string")
+        FH_dict=FeatureHasher(n_features=16,input_type="dict")
+
+        # Load nodeid2msg from disk or build it from the database
+        nodeid2msg = load_nodeid2msg()
+
+        def path2higlist(p):
+            """Convert a file path into a hierarchical list."""
+            l=[]
+            spl=p.strip().split('/')
+            for i in spl:
+                if len(l)!=0:
+                    l.append(l[-1]+'/'+i)
+                else:
+                    l.append(i)
+        #     print(l)
+            return l
+
+        def ip2higlist(p):
+            """Convert an IP address into a hierarchical list."""
+            l=[]
+            spl=p.strip().split('.')
+            for i in spl:
+                if len(l)!=0:
+                    l.append(l[-1]+'.'+i)
+                else:
+                    l.append(i)
+        #     print(l)
+            return l
+
+        def subject2higlist(p):
+            """Convert a subject string into a hierarchical list."""
+            l=[]
+            spl=p.strip().split('/')
+            for i in spl:
+                if len(l)!=0:
+                    l.append(l[-1]+'/'+i)
+                else:
+                    l.append(i)
+        #     print(l)
+            return l
+
+        def list2str(l):
+            """Convert a list into a single string by concatenating elements."""
+            s=''
+            for i in l:
+                s+=i
+            return s
+
+        # Initialize lists for node message vectors and dictionaries
+        node_msg_vec=[]
+        node_msg_dic_list=[]
+
+        # Process each node ID in nodeid2msg
+        for i in tqdm(nodeid2msg.keys()):
+            if type(i)==int:                                # ensure key is an int
+                # Check for 'netflow' key and build hierarchical list
+                if 'netflow' in nodeid2msg[i].keys():
+                    higlist=['netflow']
+                    higlist+=ip2higlist(nodeid2msg[i]['netflow'])
+                
+                # Check for 'file' key and build hierarchical list
+                if 'file' in nodeid2msg[i].keys():
+                    higlist=['file']
+                    higlist+=path2higlist(nodeid2msg[i]['file'])
+
+                # Check for 'subject' key and build hierarchical list
+                if 'subject' in nodeid2msg[i].keys():
+                    higlist=['subject']
+                    higlist+=subject2higlist(nodeid2msg[i]['subject'])
+        
+                # Convert the hierarchical list to string and append to the message dictionary list
+                node_msg_dic_list.append(list2str(higlist))
+
+        logging.info(f"node_msg_dic_list-type: {type(node_msg_dic_list)}")
+        logging.info(f"node_msg_dic_list-len: {len(node_msg_dic_list)}")
+
+        # Initialize a list to store hierarchical vectors for nodes
+        node2higvec=[]
+
+        # Convert each message dictionary to a high-dimensional vector
+        for i in tqdm(node_msg_dic_list):
+            #print(f"i: {i}")
+
+            if isinstance(i, str):  
+                # Wrap the string in another list to transform it as a single sample
+                vec = FH_string.transform([[i]]).toarray()  # Pass as a list of lists
             else:
-                l.append(i)
-    #     print(l)
-        return l
+                vec=FH_string.transform([i]).toarray()
+        
+            node2higvec.append(vec)
 
-    def ip2higlist(p):
-        """Convert an IP address into a hierarchical list."""
-        l=[]
-        spl=p.strip().split('.')
-        for i in spl:
-            if len(l)!=0:
-                l.append(l[-1]+'.'+i)
-            else:
-                l.append(i)
-    #     print(l)
-        return l
+        # Reshape the node vector array
+        node2higvec=np.array(node2higvec).reshape([-1,16])
 
-    def subject2higlist(p):
-        """Convert a subject string into a hierarchical list."""
-        l=[]
-        spl=p.strip().split('/')
-        for i in spl:
-            if len(l)!=0:
-                l.append(l[-1]+'/'+i)
-            else:
-                l.append(i)
-    #     print(l)
-        return l
+        # Define relation to ID mapping
+        rel2id = {
+            1: 'EVENT_CONNECT', 'EVENT_CONNECT': 1,
+            2: 'EVENT_EXECUTE', 'EVENT_EXECUTE': 2,
+            3: 'EVENT_OPEN', 'EVENT_OPEN': 3,
+            4: 'EVENT_READ', 'EVENT_READ': 4,
+            5: 'EVENT_RECVFROM', 'EVENT_RECVFROM': 5,
+            6: 'EVENT_RECVMSG', 'EVENT_RECVMSG': 6,
+            7: 'EVENT_SENDMSG', 'EVENT_SENDMSG': 7,
+            8: 'EVENT_SENDTO', 'EVENT_SENDTO': 8,
+            9: 'EVENT_WRITE', 'EVENT_WRITE': 9
+        }
+        
+        # Generate edge type one-hot
+        relvec=torch.nn.functional.one_hot(torch.arange(0, len(rel2id.keys())//2), num_classes=len(rel2id.keys())//2)
 
-    def list2str(l):
-        """Convert a list into a single string by concatenating elements."""
-        s=''
-        for i in l:
-            s+=i
-        return s
+        # Map different relation types to their one-hot encoding
+        rel2vec={}
+        for i in rel2id.keys():
+            if type(i) is not int:                  # skip int keys
+                rel2vec[i]= relvec[rel2id[i]-1]     # map relation type to vector
+                rel2vec[relvec[rel2id[i]-1]]=i      # reverse mapping
 
-    # Initialize lists for node message vectors and dictionaries
-    node_msg_vec=[]
-    node_msg_dic_list=[]
+        # Create the embeddings directory if it does not exist
+        if not os.path.exists(DEFAULT_EMB_DIR):
+            os.makedirs(DEFAULT_EMB_DIR)
+            logging.info(f"Created directory: {DEFAULT_EMB_DIR}")
 
-    # Process each node ID in nodeid2msg
-    for i in tqdm(nodeid2msg.keys()):
-        if type(i)==int:                                # ensure key is an int
-            # Check for 'netflow' key and build hierarchical list
-            if 'netflow' in nodeid2msg[i].keys():
-                higlist=['netflow']
-                higlist+=ip2higlist(nodeid2msg[i]['netflow'])
-            
-            # Check for 'file' key and build hierarchical list
-            if 'file' in nodeid2msg[i].keys():
-                higlist=['file']
-                higlist+=path2higlist(nodeid2msg[i]['file'])
+        # save the results (embeddings) to files
+        torch.save(node2higvec, DEFAULT_EMB_DIR + "node2higvec")
+        torch.save(rel2vec, DEFAULT_EMB_DIR + "rel2vec")
+    else:
+        logging.warning("skipped embedding creation...")
 
-            # Check for 'subject' key and build hierarchical list
-            if 'subject' in nodeid2msg[i].keys():
-                higlist=['subject']
-                higlist+=subject2higlist(nodeid2msg[i]['subject'])
-    
-            # Convert the hierarchical list to string and append to the message dictionary list
-            node_msg_dic_list.append(list2str(higlist))
+    print("\r\ngenerating dataset...")
 
-            logging.info(f"node_msg_dic_list-type: {type(node_msg_dic_list)}")
-            logging.info(f"node_msg_dic_list-len: {len(node_msg_dic_list)}")
+    # Create the training graphs directory if it does not exist
+    if not os.path.exists(DEFAULT_TRAIN_GRAPHS_DIR):
+        os.makedirs(DEFAULT_TRAIN_GRAPHS_DIR)
+        logging.info(f"Created directory: {DEFAULT_TRAIN_GRAPHS_DIR}")
 
-    # Initialize a list to store hierarchical vectors for nodes
-    node2higvec=[]
+    for day in tqdm(range(8,18)):
+        start_timestamp=datetime_to_ns_time_US('2019-05-'+str(day)+' 00:00:00')
+        end_timestamp=datetime_to_ns_time_US('2019-05-'+str(day+1)+' 00:00:00')
+        
+        sql="""
+        select * from event_table
+        where
+            timestamp_rec>'%s' and timestamp_rec<'%s'
+            ORDER BY timestamp_rec;
+        """%(start_timestamp,end_timestamp)
+        
+        logging.info(f"sql: {sql}")
 
-    # Convert each message dictionary to a high-dimensional vector
-    for i in tqdm(node_msg_dic_list):
-        vec=FH_string.transform([i]).toarray()
-        node2higvec.append(vec)
+        cur.execute(sql)
+        events = cur.fetchall()
 
-    # Reshape the node vector array
-    node2higvec=np.array(node2higvec).reshape([-1,16])
+        print('2019-05-'+str(day)," events count:",str(len(events)))
+        edge_list=[]
+        for e in events:
+            edge_temp=[int(e[1]),int(e[4]),e[2],e[5]]
+            if e[2] in rel2id:
+    #         if True:
+                edge_list.append(edge_temp)
+        print('2019-05-'+str(day)," edge list len:",str(len(edge_list)))
+        
+        if len(edge_list) == 0:
+            continue
 
-    # Define relation to ID mapping
-    rel2id = {
-        1: 'EVENT_CONNECT', 'EVENT_CONNECT': 1,
-        2: 'EVENT_EXECUTE', 'EVENT_EXECUTE': 2,
-        3: 'EVENT_OPEN', 'EVENT_OPEN': 3,
-        4: 'EVENT_READ', 'EVENT_READ': 4,
-        5: 'EVENT_RECVFROM', 'EVENT_RECVFROM': 5,
-        6: 'EVENT_RECVMSG', 'EVENT_RECVMSG': 6,
-        7: 'EVENT_SENDMSG', 'EVENT_SENDMSG': 7,
-        8: 'EVENT_SENDTO', 'EVENT_SENDTO': 8,
-        9: 'EVENT_WRITE', 'EVENT_WRITE': 9
-    }
-    
-    # Generate edge type one-hot
-    relvec=torch.nn.functional.one_hot(torch.arange(0, len(rel2id.keys())//2), num_classes=len(rel2id.keys())//2)
+        dataset = TemporalData()
+        src = []
+        dst = []
+        msg = []
+        t = []
+        for i in edge_list:
+            src.append(int(i[0]))
+            dst.append(int(i[1]))
+        #     msg.append(torch.cat([torch.from_numpy(node2higvec_bn[i[0]]), rel2vec[i[2]], torch.from_numpy(node2higvec_bn[i[1]])] ))
+            msg.append(torch.cat([torch.from_numpy(node2higvec[i[0]]), rel2vec[i[2]], torch.from_numpy(node2higvec[i[1]])] ))
+            t.append(int(i[3]))
 
-    # Map different relation types to their one-hot encoding
-    rel2vec={}
-    for i in rel2id.keys():
-        if type(i) is not int:                  # skip int keys
-            rel2vec[i]= relvec[rel2id[i]-1]     # map relation type to vector
-            rel2vec[relvec[rel2id[i]-1]]=i      # reverse mapping
-
-    # Create the embeddings directory if it does not exist
-    if not os.path.exists(DEFAULT_EMB_DIR):
-        os.makedirs(DEFAULT_EMB_DIR)
-        logging.info(f"Created directory: {DEFAULT_EMB_DIR}")
-
-    # save the results (embeddings) to files
-    torch.save(node2higvec, DEFAULT_EMB_DIR + "node2higvec")
-    torch.save(rel2vec, DEFAULT_EMB_DIR + "rel2vec")
-
-    # -----------------------------------------------------------------------------------------------
+        dataset.src = torch.tensor(src)
+        dataset.dst = torch.tensor(dst)
+        dataset.t = torch.tensor(t)
+        dataset.msg = torch.vstack(msg)
+        dataset.src = dataset.src.to(torch.long)
+        dataset.dst = dataset.dst.to(torch.long)
+        dataset.msg = dataset.msg.to(torch.float)
+        dataset.t = dataset.t.to(torch.long)
+        
+        torch.save(dataset, DEFAULT_TRAIN_GRAPHS_DIR + "graph_5_"+str(day)+".TemporalData.simple")  
 
 
 # --------------------------------- CLI -----------------------------------
@@ -1009,6 +1044,7 @@ def make_parser():
     p.add_argument("--skip-files", action="store_true", help="Skip parsing/inserting file data ")
     p.add_argument("--skip-node2ids", action="store_true", help="Skip parsing/inserting node2id data ")
     p.add_argument("--skip-events", action="store_true", help="Skip parsing/inserting event data ")
+    p.add_argument("--skip-embeddings", action="store_true", help="Skip creation of embeddings")
 
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
 
@@ -1022,4 +1058,7 @@ def make_parser():
 
 if __name__ == "__main__":
     args = make_parser().parse_args()
+
+    print(f"args: {args}")
+    
     run(args)
