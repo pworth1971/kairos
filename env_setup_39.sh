@@ -3,12 +3,12 @@ set -e
 
 # -----------------------------------------------------------------------------
 # Script: setup.sh
-# Purpose: Install Python 3.10 env and PostgreSQL 18
+# Purpose: Install Python 3.9 env and PostgreSQL 18
 # -----------------------------------------------------------------------------
 
 # Variables
-ENV_NAME="python310"
-PY_VER="3.10"
+ENV_NAME="python39"
+PY_VER="3.9"
 GIT_USER_NAME="Peter Worth"
 GIT_USER_EMAIL="peterworthjr@gmail.com"
 
@@ -22,7 +22,7 @@ echo "[*] Configuring git global user..."
 git config --global user.name "$GIT_USER_NAME"
 git config --global user.email "$GIT_USER_EMAIL"
 
-# Step 3: Create Python 3.10 environment
+# Step 3: Create Python 3.9 environment
 echo "[*] Creating conda environment '$ENV_NAME' with Python $PY_VER..."
 conda create -y -n "$ENV_NAME" python="$PY_VER"
 
@@ -39,19 +39,17 @@ fi
 echo "[*] Activating conda environment '$ENV_NAME'..."
 conda activate "$ENV_NAME"
 
-
 # Step 6. Install base conda packages
 echo "Updating conda packags and installing psycopg2 and tqdm..."
 conda update --all
-conda install -y psycopg2 tqdm
-
+conda install -y psycopg2 tqdm pytz
 
 # Step 7. Install pinned pip packages
 echo "Installing pinned pip packages..."
 pip install scikit-learn networkx xxhash graphviz
 
 # Step 8. Install PyTorch GPU + PyG stack
-echo "Installing PyTorch 1.13.1 (CUDA 11.7) and PyTorch Geometric..."
+echo "Installing PyTorch (CUDA) and PyTorch Geometric..."
 conda install -y -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda
 
 pip install torch_geometric
@@ -71,14 +69,5 @@ echo ""
 echo "To activate it again later, run:"
 echo "    source /root/miniconda3/etc/profile.d/conda.sh && conda activate $ENV_NAME"
 echo "------------------------------------------------------------"
-
-Environment:
-  - Name: ${ENV_NAME}
-  - Python: ${PY_VERSION}
-  - Installed:
-      * psycopg2, tqdm (conda)
-      * scikit-learn==1.2.0, networkx==2.8.7, xxhash==3.2.0, graphviz==0.20.1 (pip)
-      * PyTorch 1.13.1 + CUDA 11.7, TorchVision 0.14.1, Torchaudio 0.13.1 (conda)
-      * torch_geometric==2.0.0, pyg_lib, torch_scatter, torch_sparse, torch_cluster, torch_spline_conv (pip)
 
 EOF
