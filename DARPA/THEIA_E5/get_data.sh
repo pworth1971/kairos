@@ -6,8 +6,11 @@ set -euo pipefail
 # Purpose: Download all .gz files from Google Drive (via gdown) and decompress
 # -----------------------------------------------------------------------------
 
-FOLDER_URL="https://drive.google.com/drive/folders/13zdJvC62zsJc2nD7KWxtN9xkk05LdQGw"
-OUTPUT_DIR="./theia"
+DATA_URL="https://drive.google.com/drive/folders/13zdJvC62zsJc2nD7KWxtN9xkk05LdQGw"
+TOOLS_URL="https://drive.google.com/drive/folders/1YDxodpEmwu4VTlczsrLGkZMnh_o70lUh"
+
+DATA_OUTPUT_DIR="./theia"
+TOOLS_OUTPUT_DIR="./Tools"
 
 # --- Check dependencies ---
 for cmd in pip gdown pv pigz; do
@@ -21,20 +24,36 @@ for cmd in pip gdown pv pigz; do
   fi
 done
 
-# --- Download the folder ---
+# --- Download the Data folder ---
 echo "[*] Downloading from Google Drive..."
-gdown --fuzzy --folder "$FOLDER_URL" -O ./ --remaining-ok
+gdown --fuzzy --folder "$DATA_URL" -O ./ --remaining-ok
 
 # --- Find and decompress all .gz files ---
 echo "[*] Searching for .gz files in $OUTPUT_DIR ..."
-find "$OUTPUT_DIR" -type f -name '*.gz' -print0 \
+find "$DATA_OUTPUT_DIR" -type f -name '*.gz' -print0 \
 | while IFS= read -r -d '' f; do
     out="${f%.gz}"
     echo "Decompressing: $f  ->  $out"
     pv "$f" | pigz -d > "$out"
     # Uncomment the next line to remove .gz after success
     # rm "$f"
-done |& tee decompress_progress.log
+done |& tee decompress_data_progress.log
+
+
+# --- Download the Tools folder ---
+echo "[*] Downloading from Google Drive..."
+gdown --fuzzy --folder "$TOOLS_URL" -O ./ --remaining-ok
+
+# --- Find and decompress all .gz files ---
+echo "[*] Searching for .gz files in $OUTPUT_DIR ..."
+find "$TOOLS_OUTPUT_DIR" -type f -name '*.gz' -print0 \
+| while IFS= read -r -d '' f; do
+    out="${f%.gz}"
+    echo "Decompressing: $f  ->  $out"
+    pv "$f" | pigz -d > "$out"
+    # Uncomment the next line to remove .gz after success
+    # rm "$f"
+done |& tee decompress_tools_progress.log
 
 echo "------------------------------------------------------------"
 echo "✅ All downloads complete. Decompression log: decompress_progress.log"
