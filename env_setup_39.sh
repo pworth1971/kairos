@@ -46,7 +46,7 @@ conda install -y psycopg2 tqdm pytz avro
 
 # Step 7. Install pinned pip packages
 echo "Installing pinned pip packages..."
-pip install scikit-learn networkx xxhash graphviz
+pip install scikit-learn networkx xxhash graphviz gdown
 
 # Step 8. Install PyTorch GPU + PyG stack
 echo "Installing PyTorch (CUDA) and PyTorch Geometric..."
