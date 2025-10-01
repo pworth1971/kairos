@@ -34,6 +34,7 @@ import gc
 
 import torch
 import torch_geometric
+from torch_geometric.data import *
 from torch_geometric.transforms import NormalizeFeatures
 
 from sklearn.feature_extraction import FeatureHasher
@@ -827,140 +828,139 @@ def run(args):
     # -------------------------------------- featurization ------------------------------------------
     #
 
-    if not args.skip_embeddings:
+    #
+    # Define relation to ID mapping
+    # must be defined 
+    #
+    rel2id = {
+        1: 'EVENT_CONNECT', 'EVENT_CONNECT': 1,
+        2: 'EVENT_EXECUTE', 'EVENT_EXECUTE': 2,
+        3: 'EVENT_OPEN', 'EVENT_OPEN': 3,
+        4: 'EVENT_READ', 'EVENT_READ': 4,
+        5: 'EVENT_RECVFROM', 'EVENT_RECVFROM': 5,
+        6: 'EVENT_RECVMSG', 'EVENT_RECVMSG': 6,
+        7: 'EVENT_SENDMSG', 'EVENT_SENDMSG': 7,
+        8: 'EVENT_SENDTO', 'EVENT_SENDTO': 8,
+        9: 'EVENT_WRITE', 'EVENT_WRITE': 9
+    }
 
-        print("\r\nbuilding embeddings (aka featurization)...")
+
+    print("\n[INFO] Building or loading embeddings (aka featurization)...")
+
+    node2higvec_path = os.path.join(DEFAULT_EMB_DIR, "node2higvec.pt")
+    rel2vec_path     = os.path.join(DEFAULT_EMB_DIR, "rel2vec.pt")
+
+    # Check if both embeddings already exist
+    if os.path.exists(node2higvec_path) and os.path.exists(rel2vec_path):
+        
+        logging.info(f"Loading existing embeddings from {DEFAULT_EMB_DIR}")
+
+        node2higvec = torch.load(node2higvec_path)
+        rel2vec     = torch.load(rel2vec_path)
+
+    else:
+        logging.info("Embeddings not found. Creating new embeddings...")
 
         # Initialize FeatureHasher for string and dictionary inputs
-        FH_string=FeatureHasher(n_features=16,input_type="string")
-        FH_dict=FeatureHasher(n_features=16,input_type="dict")
+        FH_string = FeatureHasher(n_features=16, input_type="string")
+        FH_dict   = FeatureHasher(n_features=16, input_type="dict")
 
         # Load nodeid2msg from disk or build it from the database
         nodeid2msg = load_nodeid2msg()
 
         def path2higlist(p):
-            """Convert a file path into a hierarchical list."""
-            l=[]
-            spl=p.strip().split('/')
+            l=[]; spl=p.strip().split('/')
             for i in spl:
-                if len(l)!=0:
-                    l.append(l[-1]+'/'+i)
-                else:
-                    l.append(i)
-        #     print(l)
+                l.append((l[-1]+'/'+i) if l else i)
             return l
 
         def ip2higlist(p):
-            """Convert an IP address into a hierarchical list."""
-            l=[]
-            spl=p.strip().split('.')
+            l=[]; spl=p.strip().split('.')
             for i in spl:
-                if len(l)!=0:
-                    l.append(l[-1]+'.'+i)
-                else:
-                    l.append(i)
-        #     print(l)
+                l.append((l[-1]+'.'+i) if l else i)
             return l
 
         def subject2higlist(p):
-            """Convert a subject string into a hierarchical list."""
-            l=[]
-            spl=p.strip().split('/')
+            l=[]; spl=p.strip().split('/')
             for i in spl:
-                if len(l)!=0:
-                    l.append(l[-1]+'/'+i)
-                else:
-                    l.append(i)
-        #     print(l)
+                l.append((l[-1]+'/'+i) if l else i)
             return l
 
         def list2str(l):
-            """Convert a list into a single string by concatenating elements."""
-            s=''
-            for i in l:
-                s+=i
-            return s
+            return ''.join(l)
 
         # Initialize lists for node message vectors and dictionaries
-        node_msg_vec=[]
         node_msg_dic_list=[]
 
         # Process each node ID in nodeid2msg
         for i in tqdm(nodeid2msg.keys()):
-            if type(i)==int:                                # ensure key is an int
-                # Check for 'netflow' key and build hierarchical list
-                if 'netflow' in nodeid2msg[i].keys():
-                    higlist=['netflow']
-                    higlist+=ip2higlist(nodeid2msg[i]['netflow'])
-                
-                # Check for 'file' key and build hierarchical list
-                if 'file' in nodeid2msg[i].keys():
-                    higlist=['file']
-                    higlist+=path2higlist(nodeid2msg[i]['file'])
+            if isinstance(i, int):  # only int keys
+                if 'netflow' in nodeid2msg[i]:
+                    higlist=['netflow'] + ip2higlist(nodeid2msg[i]['netflow'])
+                elif 'file' in nodeid2msg[i]:
+                    higlist=['file'] + path2higlist(nodeid2msg[i]['file'])
+                elif 'subject' in nodeid2msg[i]:
+                    higlist=['subject'] + subject2higlist(nodeid2msg[i]['subject'])
+                else:
+                    continue
 
-                # Check for 'subject' key and build hierarchical list
-                if 'subject' in nodeid2msg[i].keys():
-                    higlist=['subject']
-                    higlist+=subject2higlist(nodeid2msg[i]['subject'])
-        
-                # Convert the hierarchical list to string and append to the message dictionary list
                 node_msg_dic_list.append(list2str(higlist))
 
-        logging.info(f"node_msg_dic_list-type: {type(node_msg_dic_list)}")
-        logging.info(f"node_msg_dic_list-len: {len(node_msg_dic_list)}")
+        logging.info(f"node_msg_dic_list type={type(node_msg_dic_list)} len={len(node_msg_dic_list)}")
 
-        # Initialize a list to store hierarchical vectors for nodes
+        # Build node2higvec
         node2higvec=[]
-
-        # Convert each message dictionary to a high-dimensional vector
         for i in tqdm(node_msg_dic_list):
-            #print(f"i: {i}")
-
-            if isinstance(i, str):  
-                # Wrap the string in another list to transform it as a single sample
-                vec = FH_string.transform([[i]]).toarray()  # Pass as a list of lists
+            if isinstance(i, str):
+                vec = FH_string.transform([[i]]).toarray()
             else:
-                vec=FH_string.transform([i]).toarray()
-        
+                vec = FH_string.transform([i]).toarray()
             node2higvec.append(vec)
 
-        # Reshape the node vector array
-        node2higvec=np.array(node2higvec).reshape([-1,16])
+        node2higvec = np.array(node2higvec).reshape([-1,16])
 
-        # Define relation to ID mapping
-        rel2id = {
-            1: 'EVENT_CONNECT', 'EVENT_CONNECT': 1,
-            2: 'EVENT_EXECUTE', 'EVENT_EXECUTE': 2,
-            3: 'EVENT_OPEN', 'EVENT_OPEN': 3,
-            4: 'EVENT_READ', 'EVENT_READ': 4,
-            5: 'EVENT_RECVFROM', 'EVENT_RECVFROM': 5,
-            6: 'EVENT_RECVMSG', 'EVENT_RECVMSG': 6,
-            7: 'EVENT_SENDMSG', 'EVENT_SENDMSG': 7,
-            8: 'EVENT_SENDTO', 'EVENT_SENDTO': 8,
-            9: 'EVENT_WRITE', 'EVENT_WRITE': 9
-        }
-        
-        # Generate edge type one-hot
-        relvec=torch.nn.functional.one_hot(torch.arange(0, len(rel2id.keys())//2), num_classes=len(rel2id.keys())//2)
+        # Generate relation one-hots
+        relvec = torch.nn.functional.one_hot(
+            torch.arange(0, len(rel2id.keys())//2),
+            num_classes=len(rel2id.keys())//2
+        )
 
-        # Map different relation types to their one-hot encoding
         rel2vec={}
-        for i in rel2id.keys():
-            if type(i) is not int:                  # skip int keys
-                rel2vec[i]= relvec[rel2id[i]-1]     # map relation type to vector
-                rel2vec[relvec[rel2id[i]-1]]=i      # reverse mapping
+        for k in rel2id.keys():
+            if not isinstance(k, int):
+                rel2vec[k] = relvec[rel2id[k]-1]
+                rel2vec[relvec[rel2id[k]-1]] = k
 
-        # Create the embeddings directory if it does not exist
+        # Ensure embedding directory exists
         if not os.path.exists(DEFAULT_EMB_DIR):
             os.makedirs(DEFAULT_EMB_DIR)
             logging.info(f"Created directory: {DEFAULT_EMB_DIR}")
 
-        # save the results (embeddings) to files
-        torch.save(node2higvec, DEFAULT_EMB_DIR + "node2higvec")
-        torch.save(rel2vec, DEFAULT_EMB_DIR + "rel2vec")
-    else:
-        logging.warning("skipped embedding creation...")
+        # Save to disk
+        torch.save(node2higvec, node2higvec_path)
+        torch.save(rel2vec, rel2vec_path)
+        logging.info("Embeddings created and saved successfully.")
 
+
+    # --- Print / log embedding info ---
+    # node2higvec is usually a numpy.ndarray (or could be torch.Tensor if you saved it that way)
+    if isinstance(node2higvec, np.ndarray):
+        logging.info(f"node2higvec: type={type(node2higvec)}, shape={node2higvec.shape}, dtype={node2higvec.dtype}")
+    elif isinstance(node2higvec, torch.Tensor):
+        logging.info(f"node2higvec: type={type(node2higvec)}, shape={tuple(node2higvec.size())}, dtype={node2higvec.dtype}")
+    else:
+        logging.info(f"node2higvec: type={type(node2higvec)}, length={len(node2higvec)}")
+
+    # rel2vec is usually a dict mapping relation strings to one-hot tensors
+    logging.info(f"rel2vec: type={type(rel2vec)}, size={len(rel2vec)}")
+    # Print a sample key/value info for inspection
+    if isinstance(rel2vec, dict):
+        first_k = next(iter(rel2vec.keys()))
+        first_v = rel2vec[first_k]
+        logging.info(f"rel2vec sample entry: key={first_k} ({type(first_k)}), value type={type(first_v)} "
+                     f"shape={getattr(first_v,'shape',getattr(first_v,'size',None))}")
+
+                     
     print("\r\ngenerating dataset...")
 
     # Create the training graphs directory if it does not exist
@@ -971,6 +971,18 @@ def run(args):
     for day in tqdm(range(8,18)):
         start_timestamp=datetime_to_ns_time_US('2019-05-'+str(day)+' 00:00:00')
         end_timestamp=datetime_to_ns_time_US('2019-05-'+str(day+1)+' 00:00:00')
+
+        # build date strings
+        start_str = f"2019-05-{day:02d} 00:00:00"
+        end_str   = f"2019-05-{day+1:02d} 00:00:00"
+
+        # convert to ns timestamps
+        start_timestamp = datetime_to_ns_time_US(start_str)
+        end_timestamp   = datetime_to_ns_time_US(end_str)
+
+        # log both clean and numeric
+        logging.info(f"Processing window: {start_str} → {end_str} "
+                    f"(ns={start_timestamp}..{end_timestamp})")
         
         sql="""
         select * from event_table
@@ -1044,7 +1056,6 @@ def make_parser():
     p.add_argument("--skip-files", action="store_true", help="Skip parsing/inserting file data ")
     p.add_argument("--skip-node2ids", action="store_true", help="Skip parsing/inserting node2id data ")
     p.add_argument("--skip-events", action="store_true", help="Skip parsing/inserting event data ")
-    p.add_argument("--skip-embeddings", action="store_true", help="Skip creation of embeddings")
 
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
 
