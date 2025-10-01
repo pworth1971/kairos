@@ -43,7 +43,7 @@ conda activate "$ENV_NAME"
 # Step 6. Install base conda packages
 echo "Updating conda packags and installing psycopg2 and tqdm..."
 conda update --all
-conda install -y psycopg2 tqdm pytz
+conda install -y psycopg2 tqdm pytz gdown
 
 
 # Step 7. Install pinned pip packages
