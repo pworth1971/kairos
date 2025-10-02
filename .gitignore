@@ -1,15 +1,15 @@
 *DS_Store
 
-DARPA/THEIA_E5/theia/
+# Tools directory
+DARPA/THEIA_E5/Tools/
+DARPA/Tools/ta3-java-consumer/
 
-DARPA/THEIA_E5/nodeid2msg.pkl
-
-DARPA/THEIA_E5/decoded/
-
-DARPA/THEIA_E5/embeddings/
-
-DARPA/THEIA_E5/Tools/ta3-java-consumer/tc-bbn-kafka/
-
-DARPA/THEIA_E5/Tools/ta3-java-consumer/ta3-serialization-schema/
+# temp embeddings files
 DARPA/THEIA_E5/embeddings/
 DARPA/THEIA_E5/train_graphs/
+DARPA/THEIA_E5/nodeid2msg.pkl
+
+# raw data directories
+DARPA/THEIA_E5/decoded/
+DARPA/CADETS_E3/data/
+DARPA/THEIA_E5/data/
