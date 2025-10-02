@@ -1,8 +1,12 @@
 *DS_Store
 
-# Tools directory
+# THEIA_E5 Tools directory
 DARPA/THEIA_E5/Tools/
 DARPA/Tools/ta3-java-consumer/
+
+# CADETS_E3 Tools directory
+DARPA/CADETS_E3/Tools/
+DARPA/CADETS_E3/Tools/ta3-java-consumer/
 
 # temp embeddings files
 DARPA/THEIA_E5/embeddings/
@@ -13,3 +17,4 @@ DARPA/THEIA_E5/nodeid2msg.pkl
 DARPA/THEIA_E5/decoded/
 DARPA/CADETS_E3/data/
 DARPA/THEIA_E5/data/
+
