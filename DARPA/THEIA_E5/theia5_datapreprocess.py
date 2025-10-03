@@ -43,15 +43,22 @@ from sklearn import preprocessing
 
 # ----------------------------- Configuration -----------------------------
 
+"""
+# Ubunu Linux Dev
 DEFAULT_RAW_DIR = "/home/kairos/DARPA/THEIA_E5/"
 DEFAULT_OUT_DIR = "/home/kairos/DARPA/THEIA_E5/train_graph/"
 DEFAULT_SUB_DIR = "theia/"
+"""
 
+
+# MacOS Dev
+DEFAULT_RAW_DIR = "/Users/pietro/code/kairos/DARPA/THEIA_E5"
+DEFAULT_OUT_DIR = "/Users/pietro/code/kairos/DARPA/THEIA_E5/train_graph/"
+DEFAULT_SUB_DIR = "Data/"
 DEFAULT_EMB_DIR = "./embeddings/"
-
 DEFAULT_TRAIN_GRAPHS_DIR = "./train_graphs/"
 
-NODEID2MSG_FILE = "nodeid2msg.pkl"  # File to save the nodeid2msg data
+NODEID2MSG_FILE = "./pickle/nodeid2msg.pkl"  # File to save the nodeid2msg data
 
 # Postgres connection defaults; hardcoded parameters
 DEFAULT_PG = dict(
