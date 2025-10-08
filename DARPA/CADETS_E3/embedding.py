@@ -18,7 +18,7 @@ import platform
 PG_CONFIG = {
     "dbname": "tc_cadet_dataset_db",                # target database
     "user": "postgres",                             # owner user (default for your setup)
-    "password": os.getenv("PGPASSWORD", ""),        # optional, leave blank for local trust
+    "password": "Rafter9876!@",                     # optional, leave blank for local trust
     "host": "localhost",
     "port": 5432
 }

@@ -9,6 +9,14 @@ from kairos_utils import *
 from config import *
 from model import *
 
+
+import torch
+from torch_geometric.data.storage import GlobalStorage
+
+# allowlist GlobalStorage so torch.load can unpickle it
+torch.serialization.add_safe_globals([GlobalStorage])
+
+
 # --------------------------------------------------------------------------
 # Device detection (Apple Silicon, CUDA, or CPU)
 # --------------------------------------------------------------------------
@@ -86,9 +94,9 @@ def train(train_data,
         #src, pos_dst, t, msg = batch.src, batch.dst, batch.t, batch.msg
 
         # Prepare node neighborhood for message passing
-        n_id = torch.cat([src, pos_dst]).unique().to(device)
+        n_id = torch.cat([src, pos_dst]).unique()
         
-        # Retrieve neighbors (LastNeighborLoader may return CPU tensors)
+        # Retrieve neighbors
         n_id, edge_index, e_id = neighbor_loader(n_id)
 
         # Create assoc on the correct device
@@ -96,7 +104,7 @@ def train(train_data,
 
         # Forward pass through memory and GNN
         # Get updated memory of all nodes involved in the computation.
-        z, last_update = memory(n_id.to("cpu"))
+        z, last_update = memory(n_id)
         z = gnn(z, last_update, edge_index, train_data.t[e_id], train_data.msg[e_id])
         pos_out = link_pred(z[assoc[src]], z[assoc[pos_dst]])
 

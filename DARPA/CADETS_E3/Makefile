@@ -5,10 +5,10 @@ create_database:
 	python create_database.py
 
 embed_graphs:
-	python ../src/embedding.py
+	python embedding.py
 
 train:
-	python ../src/train.py
+	python train.py
 
 test:
 	python ../src/test.py

@@ -43,20 +43,18 @@ conda activate "$ENV_NAME"
 # Step 6. Install base conda packages
 echo "Updating conda packags and installing psycopg2 and tqdm..."
 conda update --all
-conda install -y psycopg2 tqdm pytz gdown
+conda install -y psycopg2 tqdm pytz scikit-learn
 
 
 # Step 7. Install pinned pip packages
 echo "Installing pinned pip packages..."
-pip install scikit-learn networkx xxhash graphviz
+pip install networkx xxhash graphviz gdown torch_geometric pytz psycopg2-binary xxhash
+
 
 # Step 8. Install PyTorch GPU + PyG stack
-echo "Installing PyTorch 1.13.1 (CUDA 11.7) and PyTorch Geometric..."
-conda install -y -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda
+echo "Installing PyTorch CUDA 12.8..."
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-pip install torch_geometric
-# Optional dependencies:
-pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.8.0+cpu.html
 
 # Summary
 cat <<EOF
