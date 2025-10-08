@@ -1,8 +1,8 @@
 prepare:
-	mkdir -p ./../artifact/
+	mkdir -p ./artifact/
 
 create_database:
-	python ../src/create_database.py
+	python create_database.py
 
 embed_graphs:
 	python ../src/embedding.py

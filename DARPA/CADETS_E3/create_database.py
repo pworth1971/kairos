@@ -14,31 +14,30 @@ from psycopg2 import extras as ex
 PG_CONFIG = {
     "dbname": "tc_cadet_dataset_db",                # target database
     "user": "postgres",                             # owner user (default for your setup)
-    "password": os.getenv("PGPASSWORD", ""),        # optional, leave blank for local trust
+    "password": "Rafter9876!@",                     # optional, leave blank for local trust
     "host": "localhost",
     "port": 5432
 }
 
 # Path to your raw JSON files
-RAW_DIR = "./Data/"                 
+RAW_DIR = "./data/"                 
 
 # Reverse edge types if applicable (as per your original logic)
 edge_reversed = set()
 
 # Files to process
 filelist = [
-    'ta1-cadets-e3-official.json',
-    'ta1-cadets-e3-official.json.1',
-    'ta1-cadets-e3-official.json.2',
-    'ta1-cadets-e3-official-1.json',
-    'ta1-cadets-e3-official-1.json.1',
-    'ta1-cadets-e3-official-1.json.2',
-    'ta1-cadets-e3-official-1.json.3',
-    'ta1-cadets-e3-official-1.json.4',
-    'ta1-cadets-e3-official-2.json',
-    'ta1-cadets-e3-official-2.json.1'
+    'ta1-cadets-e3-official.bin.json',
+    'ta1-cadets-e3-official.bin.json.1',
+    'ta1-cadets-e3-official.bin.json.2',
+    'ta1-cadets-e3-official-1.bin.json',
+    'ta1-cadets-e3-official-1.bin.json.1',
+    'ta1-cadets-e3-official-1.bin.json.2',
+    'ta1-cadets-e3-official-1.bin.json.3',
+    'ta1-cadets-e3-official-1.bin.json.4',
+    'ta1-cadets-e3-official-2.bin.json',
+    'ta1-cadets-e3-official-2.bin.json.1'
 ]
-
 
 # ------------------------------------------------------------------------------
 # DATABASE CONNECTION
