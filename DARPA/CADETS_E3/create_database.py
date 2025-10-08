@@ -19,25 +19,32 @@ PG_CONFIG = {
     "port": 5432
 }
 
+
+from pathlib import Path
+
+
 # Path to your raw JSON files
 RAW_DIR = "./data/"                 
+
+# Path containing your decoded CADETS json shards
+DATA_DIR = Path(RAW_DIR)   
+
+# Dynamically gather all *.json files (non-recursive)
+filelist = sorted(
+    f.name for f in DATA_DIR.iterdir()
+    if f.is_file() and f.suffix == ".json"
+)
+
+print(f"[INFO] Found {len(filelist)} JSON files in {DATA_DIR}:")
+for name in filelist:
+    print("   ", name)
+
+
 
 # Reverse edge types if applicable (as per your original logic)
 edge_reversed = set()
 
-# Files to process
-filelist = [
-    'ta1-cadets-e3-official.bin.json',
-    'ta1-cadets-e3-official.bin.json.1',
-    'ta1-cadets-e3-official.bin.json.2',
-    'ta1-cadets-e3-official-1.bin.json',
-    'ta1-cadets-e3-official-1.bin.json.1',
-    'ta1-cadets-e3-official-1.bin.json.2',
-    'ta1-cadets-e3-official-1.bin.json.3',
-    'ta1-cadets-e3-official-1.bin.json.4',
-    'ta1-cadets-e3-official-2.bin.json',
-    'ta1-cadets-e3-official-2.bin.json.1'
-]
+
 
 # ------------------------------------------------------------------------------
 # DATABASE CONNECTION
@@ -98,6 +105,24 @@ def stringtomd5(originstr):
 # ------------------------------------------------------------------------------
 # INGESTION FUNCTIONS
 # ------------------------------------------------------------------------------
+
+
+# Files to process
+"""
+filelist = [
+    'ta1-cadets-e3-official.bin.json',
+    'ta1-cadets-e3-official.bin.json.1',
+    'ta1-cadets-e3-official.bin.json.2',
+    'ta1-cadets-e3-official-1.bin.json',
+    'ta1-cadets-e3-official-1.bin.json.1',
+    'ta1-cadets-e3-official-1.bin.json.2',
+    'ta1-cadets-e3-official-1.bin.json.3',
+    'ta1-cadets-e3-official-1.bin.json.4',
+    'ta1-cadets-e3-official-2.bin.json',
+    'ta1-cadets-e3-official-2.bin.json.1'
+]
+"""
+
 
 def store_netflow(file_path, cur, connect):
     # Parse data from logs
