@@ -1,14 +1,30 @@
 from kairos_utils import *
 from config import *
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# --------------------------------------------------------------------------
+# Device detection (Apple Silicon, CUDA, or CPU)
+# --------------------------------------------------------------------------
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print("[INFO] Using Apple Silicon Metal (MPS) device.")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+    print("[INFO] Using CUDA GPU device.")
+else:
+    device = torch.device("cpu")
+    print("[INFO] Using CPU device (no GPU acceleration available).")
+
+# set default device for PyTorch    
+torch.set_default_device(device)
+
+
 criterion = nn.CrossEntropyLoss()
 
 max_node_num = 268243  # the number of nodes in node2id table +1
 min_dst_idx, max_dst_idx = 0, max_node_num
+
 # Helper vector to map global node indices to local ones.
 assoc = torch.empty(max_node_num, dtype=torch.long, device=device)
-
 
 
 class GraphAttentionEmbedding(torch.nn.Module):
