@@ -59,14 +59,19 @@ def init_database_connection2():
         raise SystemExit(f"[!] Database connection failed: {e}")
 
 
+LOG_DIR="./log/"
 
 # Setting for logging
 logger = logging.getLogger("embedding_logger")
 logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(artifact_dir + 'embedding.log')
+
+file_handler = logging.FileHandler(LOG_DIR + 'embedding.log')
 file_handler.setLevel(logging.INFO)
+
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
 file_handler.setFormatter(formatter)
+
 logger.addHandler(file_handler)
 
 
@@ -236,5 +241,6 @@ if __name__ == "__main__":
     cur, _ = init_database_connection2()
     node2higvec = gen_feature(cur=cur)
     rel2vec = gen_relation_onehot()
+    
     gen_vectorized_graphs(cur=cur, node2higvec=node2higvec, rel2vec=rel2vec, logger=logger)
 

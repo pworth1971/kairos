@@ -1,12 +1,7 @@
 *DS_Store
 
-# THEIA_E5 Tools directory
+# THEIA_E5 
 DARPA/THEIA_E5/Tools/
-DARPA/Tools/ta3-java-consumer/
-
-# CADETS_E3 Tools directory
-DARPA/CADETS_E3/Tools/
-DARPA/CADETS_E3/Tools/ta3-java-consumer/
 
 # temp embeddings files
 DARPA/THEIA_E5/embeddings/
@@ -20,9 +15,12 @@ DARPA/THEIA_E5/data/
 
 DARPA/CADETS_E5/Data/bin/
 DARPA/THEIA_E5/embeddings/node2higvec
-/DARPA/THEIA_E5/embeddings
-/DARPA/THEIA_E5/pickle
-DARPA/CADETS_E3/artifact/embedding.log
-DARPA/CADETS_E3/artifact/node2higvec
-DARPA/CADETS_E3/artifact/rel2vec
-DARPA/CADETS_E3/__pycache__/config.cpython-310.pyc
+DARPA/THEIA_E5/embeddings
+DARPA/THEIA_E5/pickle
+
+# CADETS_E3 Tools directory
+DARPA/CADETS_E3/Tools/
+DARPA/CADETS_E3/Tools/ta3-java-consumer/
+
+DARPA/CADETS_E3/artifact/
+DARPA/CADETS_E3/__pycache__/
