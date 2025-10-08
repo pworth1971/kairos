@@ -50,9 +50,9 @@ echo "[*] Activating conda environment '$ENV_NAME'..."
 conda activate "$ENV_NAME"
 
 # Step 7: Install base conda packages
-echo "[*] Updating conda packages and installing psycopg2, tqdm, pytz, avro..."
+echo "[*] Updating conda packages and installing psycopg2, tqdm, pytz..."
 conda update --all -y
-conda install -y psycopg2 tqdm pytz avro
+conda install -y psycopg2 tqdm pytz
 
 # Step 8: Install pinned pip packages
 echo "[*] Installing pinned pip packages..."
