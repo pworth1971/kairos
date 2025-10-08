@@ -1,104 +1,30 @@
 import os
 import re
 import torch
-import hashlib
 from tqdm import tqdm
-import psycopg2
-from psycopg2 import extras as ex
-
-# ------------------------------------------------------------------------------
-# CONFIGURATION
-# ------------------------------------------------------------------------------
-
-# Connection settings for PostgreSQL 16 (macOS/Homebrew or Linux)
-PG_CONFIG = {
-    "dbname": "tc_cadet_dataset_db",                # target database
-    "user": "postgres",                             # owner user (default for your setup)
-    "password": os.getenv("PGPASSWORD", ""),        # optional, leave blank for local trust
-    "host": "localhost",
-    "port": 5432
-}
-
-# Path to your raw JSON files
-RAW_DIR = "./Data/"                 
-
-# Reverse edge types if applicable (as per your original logic)
-edge_reversed = set()
-
-# Files to process
-filelist = [
-    'ta1-cadets-e3-official.json',
-    'ta1-cadets-e3-official.json.1',
-    'ta1-cadets-e3-official.json.2',
-    'ta1-cadets-e3-official-1.json',
-    'ta1-cadets-e3-official-1.json.1',
-    'ta1-cadets-e3-official-1.json.2',
-    'ta1-cadets-e3-official-1.json.3',
-    'ta1-cadets-e3-official-1.json.4',
-    'ta1-cadets-e3-official-2.json',
-    'ta1-cadets-e3-official-2.json.1'
-]
+import hashlib
 
 
-# ------------------------------------------------------------------------------
-# DATABASE CONNECTION
-# ------------------------------------------------------------------------------
+from config import *
+from kairos_utils import *
 
-def init_database_connection():
-    """Initialize PostgreSQL connection using psycopg2"""
-    try:
-        connect = psycopg2.connect(**PG_CONFIG)
-        connect.autocommit = False
-        cur = connect.cursor()
-        print(f"[+] Connected to PostgreSQL: {PG_CONFIG['dbname']} on {PG_CONFIG['host']}:{PG_CONFIG['port']}")
-        return cur, connect
-    except Exception as e:
-        raise SystemExit(f"[!] Database connection failed: {e}")
+filelist = ['ta1-cadets-e3-official.json',
+ 'ta1-cadets-e3-official.json.1',
+ 'ta1-cadets-e3-official.json.2',
+ 'ta1-cadets-e3-official-1.json',
+ 'ta1-cadets-e3-official-1.json.1',
+ 'ta1-cadets-e3-official-1.json.2',
+ 'ta1-cadets-e3-official-1.json.3',
+ 'ta1-cadets-e3-official-1.json.4',
+ 'ta1-cadets-e3-official-2.json',
+ 'ta1-cadets-e3-official-2.json.1']
 
-
-# ------------------------------------------------------------------------------
-# DATABASE RESET
-# ------------------------------------------------------------------------------
-
-def clear_database(cur, connect):
-    """Delete all rows from all relevant tables before re-ingestion."""
-    tables = [
-        "event_table",
-        "file_node_table",
-        "subject_node_table",
-        "netflow_node_table",
-        "node2id"
-    ]
-    print("\n⚠️  Clearing all existing rows from database tables...")
-
-    for table in tables:
-        try:
-            cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE;")
-            connect.commit()
-            print(f"   - Cleared: {table}")
-        except Exception as e:
-            connect.rollback()
-            print(f"[!] Failed to clear {table}: {e}")
-
-    print("✅ Database tables successfully reset.\n")
-    
-    
-    
-# ------------------------------------------------------------------------------
-# UTILITIES
-# ------------------------------------------------------------------------------
 
 def stringtomd5(originstr):
-    """Return SHA-256 hash of string (for consistency with previous pipeline)"""
     originstr = originstr.encode("utf-8")
     signaturemd5 = hashlib.sha256()
     signaturemd5.update(originstr)
     return signaturemd5.hexdigest()
-
-
-# ------------------------------------------------------------------------------
-# INGESTION FUNCTIONS
-# ------------------------------------------------------------------------------
 
 def store_netflow(file_path, cur, connect):
     # Parse data from logs
@@ -139,8 +65,6 @@ def store_netflow(file_path, cur, connect):
     ex.execute_values(cur, sql, datalist, page_size=10000)
     connect.commit()
 
-
-
 def store_subject(file_path, cur, connect):
     # Parse data from logs
     scusess_count = 0
@@ -172,7 +96,6 @@ def store_subject(file_path, cur, connect):
             '''
     ex.execute_values(cur, sql, datalist, page_size=10000)
     connect.commit()
-
 
 def store_file(file_path, cur, connect):
     file_node = set()
@@ -208,8 +131,6 @@ def store_file(file_path, cur, connect):
             '''
     ex.execute_values(cur, sql, datalist, page_size=10000)
     connect.commit()
-    
-    
 
 def create_node_list(cur, connect):
     node_list = {}
@@ -308,116 +229,34 @@ def store_event(file_path, cur, connect, reverse, nodeid2msg, subject_uuid2hash,
     connect.commit()
 
 
-
-# --------------------------------------------------------------------------
-#  Database statistics printer
-# --------------------------------------------------------------------------
-def show_database_statistics():
-    """Print row counts for all tables and event_table breakdown by operation."""
+if __name__ == "__main__":
     cur, connect = init_database_connection()
 
-    print("\n=== Database Table Row Counts ===")
-    tables = [
-        "event_table",
-        "file_node_table",
-        "subject_node_table",
-        "netflow_node_table",
-        "node2id"
-    ]
+    # There will be 155322 netflow nodes stored in the table
+    print("Processing netflow data")
+    store_netflow(file_path=raw_dir, cur=cur, connect=connect)
 
-    for table in tables:
-        try:
-            cur.execute(f"SELECT COUNT(*) FROM {table};")
-            count = cur.fetchone()[0]
-            print(f"  {table:25s}: {count:,}")
-        except Exception as e:
-            print(f"  [ERROR] Could not count {table}: {e}")
+    # There will be 224146 subject nodes stored in the table
+    print("Processing subject data")
+    store_subject(file_path=raw_dir, cur=cur, connect=connect)
 
-    print("\n=== event_table Breakdown by Operation (alphabetical) ===")
-    try:
-        cur.execute("""
-            SELECT operation, COUNT(*) AS count
-            FROM event_table
-            GROUP BY operation
-            ORDER BY operation ASC;
-        """)
-        rows = cur.fetchall()
-        if rows:
-            for op, count in rows:
-                print(f"  {op:25s}: {count:,}")
-        else:
-            print("  [!] No events found in event_table.")
-    except Exception as e:
-        print(f"  [ERROR] Could not query event_table breakdown: {e}")
+    # There will be 234245 file nodes stored in the table
+    print("Processing file data")
+    store_file(file_path=raw_dir, cur=cur, connect=connect)
 
-    connect.close()
-    print("\n📊 Database statistics collection complete.")
-    
-    
-    
+    # There will be 268242 entities stored in the table
+    print("Extracting the node list")
+    nodeid2msg, subject_uuid2hash, file_uuid2hash, net_uuid2hash = create_node_list(cur=cur, connect=connect)
 
-# ------------------------------------------------------------------------------
-# MAIN
-# ------------------------------------------------------------------------------
-
-import argparse
-
-if __name__ == "__main__":
-    
-    parser = argparse.ArgumentParser(description="CADETS E3 database loader and statistics tool.")
-    parser.add_argument("-s", "--show", action="store_true",
-                        help="Show database table counts and event_table breakdown without ingestion.")
-    args = parser.parse_args()
-
-
-    if args.show:
-        show_database_statistics()
-    else:
-        cur, connect = init_database_connection()
-
-        # 🚨 Clear the database first
-        print("\n=== Clearing CADETS E3 Dataset ===")
-        clear_database(cur, connect)
-
-        print("\n=== Ingesting CADETS E3 Dataset ===")
-        
-        # There will be 155322 netflow nodes stored in the table
-        print("Processing netflow data")
-        store_netflow(file_path=RAW_DIR, cur=cur, connect=connect)
-        
-        # There will be 224146 subject nodes stored in the table
-        print("Processing subject data")
-        store_subject(file_path=RAW_DIR, cur=cur, connect=connect)
-        
-        # There will be 234245 file nodes stored in the table
-        print("Processing file data")
-        store_file(file_path=RAW_DIR, cur=cur, connect=connect)
-        
-        # There will be 268242 entities stored in the table
-        print("Extracting the node list")
-        nodeid2msg, subject_uuid2hash, file_uuid2hash, net_uuid2hash = create_node_list(cur=cur, connect=connect)
-        
-        # There will be 29727441 events stored in the table
-        print("Processing the events")
-        store_event(
-            file_path=RAW_DIR,
-            cur=cur,
-            connect=connect,
-            reverse=edge_reversed,
-            nodeid2msg=nodeid2msg,
-            subject_uuid2hash=subject_uuid2hash,
-            file_uuid2hash=file_uuid2hash,
-            net_uuid2hash=net_uuid2hash
-        )
-        connect.close()
-        
-        print("\n✅ Ingestion complete: tc_cadet_dataset_db populated successfully.")
-        
-        # --------------------------------------------------------------------------
-        # ✅ Post-ingestion summary statistics
-        # --------------------------------------------------------------------------
-
-        show_database_statistics()
-
-        
-        
+    # There will be 29727441 events stored in the table
+    print("Processing the events")
+    store_event(
+        file_path=raw_dir,
+        cur=cur,
+        connect=connect,
+        reverse=edge_reversed,
+        nodeid2msg=nodeid2msg,
+        subject_uuid2hash=subject_uuid2hash,
+        file_uuid2hash=file_uuid2hash,
+        net_uuid2hash=net_uuid2hash
+    )

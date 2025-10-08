@@ -22,3 +22,7 @@ DARPA/CADETS_E5/Data/bin/
 DARPA/THEIA_E5/embeddings/node2higvec
 /DARPA/THEIA_E5/embeddings
 /DARPA/THEIA_E5/pickle
+DARPA/CADETS_E3/artifact/embedding.log
+DARPA/CADETS_E3/artifact/node2higvec
+DARPA/CADETS_E3/artifact/rel2vec
+DARPA/CADETS_E3/__pycache__/config.cpython-310.pyc

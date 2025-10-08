@@ -10,6 +10,56 @@ import os
 from config import *
 from kairos_utils import *
 
+
+import os
+import platform
+
+# Connection settings for PostgreSQL 16 (macOS/Homebrew or Linux)
+PG_CONFIG = {
+    "dbname": "tc_cadet_dataset_db",                # target database
+    "user": "postgres",                             # owner user (default for your setup)
+    "password": os.getenv("PGPASSWORD", ""),        # optional, leave blank for local trust
+    "host": "localhost",
+    "port": 5432
+}
+
+def init_database_connection2():
+    """
+    Initialize a PostgreSQL connection using psycopg2.
+    Automatically detects macOS (Homebrew) vs Linux for correct socket path.
+    Returns a (cursor, connection) tuple.
+    """
+
+    # Determine the appropriate host/socket path
+    system_type = platform.system().lower()
+    host = PG_CONFIG.get("host", None)
+
+    # On macOS with Homebrew PostgreSQL, Unix sockets live in /tmp
+    # On Linux, sockets typically live in /var/run/postgresql
+    if not host:
+        if "darwin" in system_type:
+            host = "/tmp"
+        else:
+            host = "/var/run/postgresql"
+
+    try:
+        conn = psycopg2.connect(
+            dbname=PG_CONFIG["dbname"],
+            user=PG_CONFIG["user"],
+            password=PG_CONFIG["password"],
+            host=host,
+            port=PG_CONFIG["port"]
+        )
+        conn.autocommit = False
+        cur = conn.cursor()
+        print(f"[+] Connected to PostgreSQL database '{PG_CONFIG['dbname']}' on host '{host}:{PG_CONFIG['port']}'")
+        return cur, conn
+
+    except psycopg2.OperationalError as e:
+        raise SystemExit(f"[!] Database connection failed: {e}")
+
+
+
 # Setting for logging
 logger = logging.getLogger("embedding_logger")
 logger.setLevel(logging.INFO)
@@ -18,6 +68,7 @@ file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
+
 
 def path2higlist(p):
     l=[]
@@ -51,8 +102,16 @@ def gen_feature(cur):
 
     # Construct the hierarchical representation for each node label
     node_msg_dic_list = []
-    for i in tqdm(nodeid2msg.keys()):
+    
+    for i in tqdm(nodeid2msg.keys()):    
         if type(i) == int:
+            
+            # Inspect nodeid2msg[i] to understand its structure
+            #print(f"\n[DEBUG] i = {i} (type: {type(i)})")
+            #print(f"[DEBUG] nodeid2msg[i] = {nodeid2msg[i]} (type: {type(nodeid2msg[i])})")
+    
+            higlist = []
+                    
             if 'netflow' in nodeid2msg[i].keys():
                 higlist = ['netflow']
                 higlist += ip2higlist(nodeid2msg[i]['netflow'])
@@ -64,16 +123,29 @@ def gen_feature(cur):
             if 'subject' in nodeid2msg[i].keys():
                 higlist = ['subject']
                 higlist += path2higlist(nodeid2msg[i]['subject'])
+            
             node_msg_dic_list.append(list2str(higlist))
 
     # Featurize the hierarchical node labels
     FH_string = FeatureHasher(n_features=node_embedding_dim, input_type="string")
     node2higvec=[]
+    
     for i in tqdm(node_msg_dic_list):
-        vec=FH_string.transform([i]).toarray()
+        
+        # Diagnostic print for each input to FeatureHasher
+        #print(f"\n[DEBUG] FeatureHasher input type: {type(i)}")
+        #print(f"[DEBUG] FeatureHasher input value: {repr(i)}")
+        
+        # FIX: convert str to list for transformation
+        tokens = i.split() if isinstance(i, str) else list(i)
+        vec = FH_string.transform([tokens]).toarray()
+        #vec=FH_string.transform([i]).toarray()
         node2higvec.append(vec)
+        
     node2higvec = np.array(node2higvec).reshape([-1, node_embedding_dim])
+    
     torch.save(node2higvec, artifact_dir + "node2higvec")
+    
     return node2higvec
 
 def gen_relation_onehot():
@@ -87,6 +159,9 @@ def gen_relation_onehot():
     return rel2vec
 
 def gen_vectorized_graphs(cur, node2higvec, rel2vec, logger):
+    
+    skipped = 0
+    
     for day in tqdm(range(2, 14)):
         start_timestamp = datetime_to_ns_time_US('2018-04-' + str(day) + ' 00:00:00')
         end_timestamp = datetime_to_ns_time_US('2018-04-' + str(day + 1) + ' 00:00:00')
@@ -98,18 +173,42 @@ def gen_vectorized_graphs(cur, node2higvec, rel2vec, logger):
         """ % (start_timestamp, end_timestamp)
         cur.execute(sql)
         events = cur.fetchall()
+        
         logger.info(f'2018-04-{day}, events count: {len(events)}')
+        
         edge_list = []
         for e in events:
+            
+            """
             edge_temp = [int(e[1]), int(e[4]), e[2], e[5]]
             if e[2] in include_edge_type:
                 edge_list.append(edge_temp)
+            """
+            
+            try:
+                # Catch missing (None) or invalid indices
+                if e[1] is None or e[4] is None:
+                    raise ValueError(f"Found NoneType in src_index_id ({e[1]}) or dst_index_id ({e[4]}) for event: {e}")
+
+                edge_temp = [int(e[1]), int(e[4]), e[2], e[5]]
+
+                if e[2] in include_edge_type:
+                    edge_list.append(edge_temp)
+
+            except Exception as ex:
+                skipped += 1
+                print(f"[WARN] Skipping malformed event at day {day}: {ex}")
+                logger.warning(f"Skipping malformed event at day {day}: {ex}")
+                continue
+            
         logger.info(f'2018-04-{day}, edge list len: {len(edge_list)}')
+        
         dataset = TemporalData()
         src = []
         dst = []
         msg = []
         t = []
+        
         for i in edge_list:
             src.append(int(i[0]))
             dst.append(int(i[1]))
@@ -125,14 +224,16 @@ def gen_vectorized_graphs(cur, node2higvec, rel2vec, logger):
         dataset.dst = dataset.dst.to(torch.long)
         dataset.msg = dataset.msg.to(torch.float)
         dataset.t = dataset.t.to(torch.long)
+        
         torch.save(dataset, graphs_dir + "/graph_4_" + str(day) + ".TemporalData.simple")
+
 
 if __name__ == "__main__":
     logger.info("Start logging.")
 
     os.system(f"mkdir -p {graphs_dir}")
 
-    cur, _ = init_database_connection()
+    cur, _ = init_database_connection2()
     node2higvec = gen_feature(cur=cur)
     rel2vec = gen_relation_onehot()
     gen_vectorized_graphs(cur=cur, node2higvec=node2higvec, rel2vec=rel2vec, logger=logger)
