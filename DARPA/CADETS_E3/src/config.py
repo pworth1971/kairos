@@ -105,6 +105,25 @@ rel2id = {
  'EVENT_RECVFROM': 7
 }
 
+import torch
+
+# --------------------------------------------------------------------------
+# Device detection (Apple Silicon, CUDA, or CPU)
+# --------------------------------------------------------------------------
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print("[INFO] Using Apple Silicon Metal (MPS) device.")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+    print("[INFO] Using CUDA GPU device.")
+else:
+    device = torch.device("cpu")
+    print("[INFO] Using CPU device (no GPU acceleration available).")
+
+# set default device for PyTorch    
+torch.set_default_device(device)
+
+
 ########################################################
 #
 #                   Model dimensionality

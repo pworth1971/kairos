@@ -6,7 +6,7 @@
 import logging
 
 from kairos_utils import *
-from config import *
+
 from model import *
 
 
@@ -17,30 +17,14 @@ from torch_geometric.data.storage import GlobalStorage
 torch.serialization.add_safe_globals([GlobalStorage])
 
 
-# --------------------------------------------------------------------------
-# Device detection (Apple Silicon, CUDA, or CPU)
-# --------------------------------------------------------------------------
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-    print("[INFO] Using Apple Silicon Metal (MPS) device.")
-elif torch.cuda.is_available():
-    device = torch.device("cuda")
-    print("[INFO] Using CUDA GPU device.")
-else:
-    device = torch.device("cpu")
-    print("[INFO] Using CPU device (no GPU acceleration available).")
-
-# set default device for PyTorch    
-torch.set_default_device(device)
 
 
 # --------------------------------------------------------------------------
 # Logging setup
 # -------------------------------------------------------------------------- 
-LOG_DIR="./log/"
 logger = logging.getLogger("training_logger")
 logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(LOG_DIR + 'training.log')
+file_handler = logging.FileHandler(log_dir + 'training.log')
 file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 file_handler.setFormatter(formatter)
