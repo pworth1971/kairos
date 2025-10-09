@@ -1,77 +1,25 @@
-from sklearn.feature_extraction import FeatureHasher
-from torch_geometric.data import *
-from tqdm import tqdm
+
 
 import numpy as np
 import logging
 import torch
 import os
 
-from config import *
+from sklearn.feature_extraction import FeatureHasher
+from torch_geometric.data import *
+from tqdm import tqdm
+
 from kairos_utils import *
 
 
-import os
-import platform
-
-# Connection settings for PostgreSQL 16 (macOS/Homebrew or Linux)
-PG_CONFIG = {
-    "dbname": "tc_cadet_dataset_db",                # target database
-    "user": "postgres",                             # owner user (default for your setup)
-    "password": "Rafter9876!@",                     # optional, leave blank for local trust
-    "host": "localhost",
-    "port": 5432
-}
-
-def init_database_connection2():
-    """
-    Initialize a PostgreSQL connection using psycopg2.
-    Automatically detects macOS (Homebrew) vs Linux for correct socket path.
-    Returns a (cursor, connection) tuple.
-    """
-
-    # Determine the appropriate host/socket path
-    system_type = platform.system().lower()
-    host = PG_CONFIG.get("host", None)
-
-    # On macOS with Homebrew PostgreSQL, Unix sockets live in /tmp
-    # On Linux, sockets typically live in /var/run/postgresql
-    if not host:
-        if "darwin" in system_type:
-            host = "/tmp"
-        else:
-            host = "/var/run/postgresql"
-
-    try:
-        conn = psycopg2.connect(
-            dbname=PG_CONFIG["dbname"],
-            user=PG_CONFIG["user"],
-            password=PG_CONFIG["password"],
-            host=host,
-            port=PG_CONFIG["port"]
-        )
-        conn.autocommit = False
-        cur = conn.cursor()
-        print(f"[+] Connected to PostgreSQL database '{PG_CONFIG['dbname']}' on host '{host}:{PG_CONFIG['port']}'")
-        return cur, conn
-
-    except psycopg2.OperationalError as e:
-        raise SystemExit(f"[!] Database connection failed: {e}")
-
-
-LOG_DIR="./log/"
 
 # Setting for logging
 logger = logging.getLogger("embedding_logger")
 logger.setLevel(logging.INFO)
-
-file_handler = logging.FileHandler(LOG_DIR + 'embedding.log')
+file_handler = logging.FileHandler(log_dir + 'embedding.log')
 file_handler.setLevel(logging.INFO)
-
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-
 file_handler.setFormatter(formatter)
-
 logger.addHandler(file_handler)
 
 
@@ -234,6 +182,7 @@ def gen_vectorized_graphs(cur, node2higvec, rel2vec, logger):
 
 
 if __name__ == "__main__":
+
     logger.info("Start logging.")
 
     os.system(f"mkdir -p {graphs_dir}")

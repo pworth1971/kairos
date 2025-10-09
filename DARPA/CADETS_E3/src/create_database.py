@@ -6,27 +6,13 @@ from tqdm import tqdm
 import psycopg2
 from psycopg2 import extras as ex
 
-# ------------------------------------------------------------------------------
-# CONFIGURATION
-# ------------------------------------------------------------------------------
+from pathlib import Path               
 
-# Connection settings for PostgreSQL 16 (macOS/Homebrew or Linux)
-PG_CONFIG = {
-    "dbname": "tc_cadet_dataset_db",                # target database
-    "user": "postgres",                             # owner user (default for your setup)
-    "password": "Rafter9876!@",                     # optional, leave blank for local trust
-    "host": "localhost",
-    "port": 5432
-}
+import kairos_utils import 8
 
-from pathlib import Path
-
-
-# Path to your raw JSON files
-RAW_DIR = "../data/"                 
 
 # Path containing your decoded CADETS json shards
-DATA_DIR = Path(RAW_DIR)   
+DATA_DIR = Path(raw_dir)   
 
 # Dynamically gather all *.json files (non-recursive)
 filelist = sorted(
@@ -39,26 +25,9 @@ for name in filelist:
     print("   ", name)
 
 
-
 # Reverse edge types if applicable (as per your original logic)
 edge_reversed = set()
 
-
-
-# ------------------------------------------------------------------------------
-# DATABASE CONNECTION
-# ------------------------------------------------------------------------------
-
-def init_database_connection():
-    """Initialize PostgreSQL connection using psycopg2"""
-    try:
-        connect = psycopg2.connect(**PG_CONFIG)
-        connect.autocommit = False
-        cur = connect.cursor()
-        print(f"[+] Connected to PostgreSQL: {PG_CONFIG['dbname']} on {PG_CONFIG['host']}:{PG_CONFIG['port']}")
-        return cur, connect
-    except Exception as e:
-        raise SystemExit(f"[!] Database connection failed: {e}")
 
 
 # ------------------------------------------------------------------------------
@@ -406,15 +375,15 @@ if __name__ == "__main__":
         
         # There will be 155322 netflow nodes stored in the table
         print("Processing netflow data")
-        store_netflow(file_path=RAW_DIR, cur=cur, connect=connect)
+        store_netflow(file_path=raw_dir, cur=cur, connect=connect)
         
         # There will be 224146 subject nodes stored in the table
         print("Processing subject data")
-        store_subject(file_path=RAW_DIR, cur=cur, connect=connect)
+        store_subject(file_path=raw_dir, cur=cur, connect=connect)
         
         # There will be 234245 file nodes stored in the table
         print("Processing file data")
-        store_file(file_path=RAW_DIR, cur=cur, connect=connect)
+        store_file(file_path=raw_dir, cur=cur, connect=connect)
         
         # There will be 268242 entities stored in the table
         print("Extracting the node list")
@@ -423,7 +392,7 @@ if __name__ == "__main__":
         # There will be 29727441 events stored in the table
         print("Processing the events")
         store_event(
-            file_path=RAW_DIR,
+            file_path=raw_dir,
             cur=cur,
             connect=connect,
             reverse=edge_reversed,

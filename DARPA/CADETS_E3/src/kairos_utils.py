@@ -1,15 +1,23 @@
-import pytz
+
 from time import mktime
 from datetime import datetime
 import time
-import psycopg2
-from psycopg2 import extras as ex
 import os.path as osp
 import os
 import copy
+import numpy as np
+import math
+import copy
+import time
+import xxhash
+import gc
+import platform
+
+from tqdm import tqdm
+import networkx as nx
+
 import torch
 from torch.nn import Linear
-from sklearn.metrics import average_precision_score, roc_auc_score
 from torch_geometric.data import TemporalData
 from torch_geometric.nn import TGNMemory, TransformerConv
 import torch.nn as nn
@@ -17,14 +25,12 @@ import torch.nn.functional as F
 from torch_geometric.nn.models.tgn import (LastNeighborLoader, IdentityMessage, MeanAggregator,
                                            LastAggregator)
 from torch_geometric import *
-from tqdm import tqdm
-import networkx as nx
-import numpy as np
-import math
-import copy
-import time
-import xxhash
-import gc
+
+import pytz
+import psycopg2
+from psycopg2 import extras as ex
+
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 from config import *
 
@@ -113,6 +119,58 @@ def init_database_connection():
                                   )
     cur = connect.cursor()
     return cur, connect
+
+
+"""
+def init_database_connection():
+    try:
+        connect = psycopg2.connect(**PG_CONFIG)
+        connect.autocommit = False
+        cur = connect.cursor()
+        print(f"[+] Connected to PostgreSQL: {PG_CONFIG['dbname']} on {PG_CONFIG['host']}:{PG_CONFIG['port']}")
+        return cur, connect
+    except Exception as e:
+        raise SystemExit(f"[!] Database connection failed: {e}")
+"""
+
+def init_database_connection2():
+    """
+    Initialize a PostgreSQL connection using psycopg2.
+    Automatically detects macOS (Homebrew) vs Linux for correct socket path.
+    Returns a (cursor, connection) tuple.
+    """
+
+    # Determine the appropriate host/socket path
+    system_type = platform.system().lower()
+    host = PG_CONFIG.get("host", None)
+
+    # On macOS with Homebrew PostgreSQL, Unix sockets live in /tmp
+    # On Linux, sockets typically live in /var/run/postgresql
+    if not host:
+        if "darwin" in system_type:
+            host = "/tmp"
+        else:
+            host = "/var/run/postgresql"
+
+    try:
+        conn = psycopg2.connect(
+            dbname=PG_CONFIG["dbname"],
+            user=PG_CONFIG["user"],
+            password=PG_CONFIG["password"],
+            host=host,
+            port=PG_CONFIG["port"]
+        )
+        conn.autocommit = False
+        cur = conn.cursor()
+        print(f"[+] Connected to PostgreSQL database '{PG_CONFIG['dbname']}' on host '{host}:{PG_CONFIG['port']}'")
+        return cur, conn
+
+    except psycopg2.OperationalError as e:
+        raise SystemExit(f"[!] Database connection failed: {e}")
+
+
+
+
 
 def gen_nodeid2msg(cur):
     sql = "select * from node2id ORDER BY index_id;"

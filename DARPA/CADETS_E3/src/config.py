@@ -10,6 +10,9 @@ raw_dir = "../data/"
 # The directory to save all artifacts
 artifact_dir = "../artifact/"
 
+# log file directory
+log_dir="../log/"
+
 # The directory to save the vectorized graphs
 graphs_dir = artifact_dir + "graphs/"
 
@@ -32,6 +35,16 @@ vis_re = artifact_dir + "vis_re/"
 
 # Database name
 database = 'tc_cadet_dataset_db'
+
+# Connection settings for PostgreSQL 16 (macOS/Homebrew or Linux)
+PG_CONFIG = {
+    "dbname": "tc_cadet_dataset_db",                # target database
+    "user": "postgres",                             # owner user (default for your setup)
+    "password": "Rafter9876!@",                     # optional, leave blank for local trust
+    "host": "localhost",
+    "port": 5432
+}
+
 
 # Only config this setting when you have the problem mentioned
 # in the Troubleshooting section in settings/environment-settings.md.

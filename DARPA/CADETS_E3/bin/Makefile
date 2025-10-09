@@ -33,9 +33,13 @@ init_database:
 	./database_setup.sh
 
 # 4. Prepare artifact directories for storing generated data/models
-prepare:
+init_artifact:
 	mkdir -p ../artifact/
 
+init_log:
+	mkdir -p ../log/
+
+prepare: init_artifact init_log
 
 # ------------------------------------------------------------------------------
 # Data ingestion and preprocessing
