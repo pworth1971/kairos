@@ -6,13 +6,13 @@
 import logging
 
 from kairos_utils import *
-from config import *
 from model import *
+
 
 # Setting for logging
 logger = logging.getLogger("reconstruction_logger")
 logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(artifact_dir + 'reconstruction.log')
+file_handler = logging.FileHandler(log_dir + 'reconstruction.log')
 file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 file_handler.setFormatter(formatter)
@@ -46,7 +46,6 @@ def test(inference_data,
 
     unique_nodes = torch.tensor([]).to(device=device)
     total_edges = 0
-
 
     start_time = inference_data.t[0]
     event_count = 0
@@ -160,7 +159,8 @@ if __name__ == "__main__":
     logger.info("Start logging.")
 
     # load the map between nodeID and node labels
-    cur, _ = init_database_connection()
+    #cur, _ = init_database_connection()
+    cur, _ = init_database_connection2()
     nodeid2msg = gen_nodeid2msg(cur=cur)
 
     # Load data

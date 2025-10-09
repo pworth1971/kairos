@@ -211,6 +211,7 @@ def init_models(node_feat_size):
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
     
+    start_time = time.time()
     logger.info("Start logging.")
     logger.info(f"Detected device: {device}")
 
@@ -218,12 +219,26 @@ if __name__ == "__main__":
     train_data = load_train_data()
     train_data = [move_to_device(g, device) for g in train_data]
     
+    # Data statistics
+    total_events = sum(g.src.size(0) for g in train_data)
+    feature_dim = train_data[0].msg.size(-1)
+    logger.info(f"Loaded {len(train_data)} temporal graphs.")
+    logger.info(f"Total events: {total_events:,}")
+    logger.info(f"Feature dimension: {feature_dim}")
+
     # Initialize the models and the optimizer
     node_feat_size = train_data[0].msg.size(-1)
     memory, gnn, link_pred, optimizer, neighbor_loader = init_models(node_feat_size=node_feat_size)
 
+    # Training loop
+    epoch_losses = []
+
     # train the model
     for epoch in tqdm(range(1, epoch_num+1)):
+    
+        epoch_start = time.time()
+        epoch_loss = 0.0
+    
         for g in train_data:
             loss = train(
                 train_data=g,
@@ -233,10 +248,59 @@ if __name__ == "__main__":
                 optimizer=optimizer,
                 neighbor_loader=neighbor_loader
             )
+            epoch_loss += loss
             logger.info(f'  Epoch: {epoch:02d}, Loss: {loss:.4f}')
 
-    # Save the trained model
-    model = [memory, gnn, link_pred, neighbor_loader]
+        epoch_time = time.time() - epoch_start
+        avg_loss = epoch_loss / len(train_data)
+        epoch_losses.append(avg_loss)
+        logger.info(f"Epoch {epoch:02d}/{epoch_num}, Loss: {avg_loss:.4f}, Time: {epoch_time:.2f}s")
+        print(f"[INFO] Epoch {epoch:02d}/{epoch_num} completed — Loss: {avg_loss:.4f} | Time: {epoch_time:.2f}s")
 
+    total_time = time.time() - start_time
+
+
+    # Save trained model
+        
+    """
+    model = [memory, gnn, link_pred, neighbor_loader]
     os.system(f"mkdir -p {models_dir}")
     torch.save(model, f"{models_dir}/models.pt")
+    """
+
+    model_state = {
+        'memory': memory.module.state_dict() if isinstance(memory, torch.nn.DataParallel) else memory.state_dict(),
+        'gnn': gnn.module.state_dict() if isinstance(gnn, torch.nn.DataParallel) else gnn.state_dict(),
+        'link_pred': link_pred.module.state_dict() if isinstance(link_pred, torch.nn.DataParallel) else link_pred.state_dict(),
+    }
+
+    os.makedirs(models_dir, exist_ok=True)
+    
+    torch.save(model_state, f"{models_dir}/models.pt")
+
+    # ----------------------------------------------------------------------
+    # Summary statistics
+    # ----------------------------------------------------------------------
+    avg_epoch_time = total_time / epoch_num
+    final_loss = epoch_losses[-1]
+    min_loss = min(epoch_losses)
+    max_loss = max(epoch_losses)
+
+    summary = f"""
+================= Training Summary =================
+Device:           {device}
+GPUs Used:        {torch.cuda.device_count() if torch.cuda.is_available() else 0}
+Epochs:           {epoch_num}
+Total Training Time: {total_time:.2f} seconds ({total_time/60:.2f} min)
+Avg Epoch Time:   {avg_epoch_time:.2f} seconds
+Final Loss:       {final_loss:.4f}
+Best Loss:        {min_loss:.4f}
+Worst Loss:       {max_loss:.4f}
+Graphs Used:      {len(train_data)}
+Total Events:     {total_events:,}
+Feature Dim:      {feature_dim}
+Model Saved To:   {models_dir}/models.pt
+====================================================
+"""
+    print(summary)
+    logger.info(summary)
