@@ -12,9 +12,8 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 
 # === Customize these ===
-DB_USER="${DB_USER:-appuser}"
-DB_PASS="${DB_PASS:-changeme-strong}"
-DB_NAME="${DB_NAME:-tc_cadet_dataset_db}"
+DB_USER="${DB_USER:-postgres}"
+DB_PASS="${DB_PASS:-Rafter9876!@}"
 DB_PORT="${DB_PORT:-5432}"
 LISTEN_ALL="${LISTEN_ALL:-true}"        # true to listen on all interfaces
 ENABLE_UFW="${ENABLE_UFW:-false}"       # true to open 5432 in UFW
@@ -108,34 +107,6 @@ elif [[ -f /etc/debian_version ]]; then
   sudo -u postgres psql --tuples-only --no-align -c "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}';" | grep -q 1 \
     || sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE ${DB_USER} WITH LOGIN PASSWORD '${DB_PASS}';"
 
-  sudo -u postgres psql --tuples-only --no-align -c "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}';" | grep -q 1 \
-    || sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
-
-  echo "[*] Creating schema for ${DB_NAME}..."
-  sudo -u postgres psql -d "${DB_NAME}" -v ON_ERROR_STOP=1 <<'EOSQL'
-CREATE TABLE IF NOT EXISTS event_table (
-    src_node varchar, src_index_id varchar, operation varchar,
-    dst_node varchar, dst_index_id varchar, timestamp_rec bigint,
-    _id serial PRIMARY KEY
-);
-CREATE TABLE IF NOT EXISTS file_node_table (
-    node_uuid varchar NOT NULL, hash_id varchar NOT NULL, path varchar,
-    CONSTRAINT file_node_table_pk PRIMARY KEY (node_uuid, hash_id)
-);
-CREATE TABLE IF NOT EXISTS netflow_node_table (
-    node_uuid varchar NOT NULL, hash_id varchar NOT NULL,
-    src_addr varchar, src_port varchar, dst_addr varchar, dst_port varchar,
-    CONSTRAINT netflow_node_table_pk PRIMARY KEY (node_uuid, hash_id)
-);
-CREATE TABLE IF NOT EXISTS subject_node_table (
-    node_uuid varchar, hash_id varchar, exec varchar
-);
-CREATE TABLE IF NOT EXISTS node2id (
-    hash_id varchar NOT NULL PRIMARY KEY,
-    node_type varchar, msg varchar, index_id bigint
-);
-EOSQL
-
   echo "[*] PostgreSQL 16 setup complete."
 
 else
@@ -156,7 +127,7 @@ fi
 cat <<EOF
 
 ------------------------------------------------------------
-✅ PostgreSQL 16 with tc_cadet_dataset_db schema is ready.
+✅ PostgreSQL 16 is ready.
 
 Connection details:
   Host:        $(hostname -I 2>/dev/null | awk '{print $1}') (or 127.0.0.1)

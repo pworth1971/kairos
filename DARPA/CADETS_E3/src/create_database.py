@@ -19,12 +19,11 @@ PG_CONFIG = {
     "port": 5432
 }
 
-
 from pathlib import Path
 
 
 # Path to your raw JSON files
-RAW_DIR = "./data/"                 
+RAW_DIR = "../data/"                 
 
 # Path containing your decoded CADETS json shards
 DATA_DIR = Path(RAW_DIR)   
