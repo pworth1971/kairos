@@ -22,6 +22,10 @@ DARPA/THEIA_E5/pickle
 DARPA/CADETS_E3/Tools/
 DARPA/CADETS_E3/Tools/ta3-java-consumer/
 
+# CADETS_E3 artifacts dircetories
 DARPA/CADETS_E3/artifact/
+DARPA/CADETS_E3/artifact/graphs/
+DARPA/CADETS_E3/artifact/models/
+
 DARPA/CADETS_E3/__pycache__/
 /DARPA/CADETS_E3/log
