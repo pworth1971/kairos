@@ -29,3 +29,15 @@ DARPA/CADETS_E3/artifact/models/
 
 DARPA/CADETS_E3/__pycache__/
 /DARPA/CADETS_E3/log
+
+
+# misc
+# Ignore model, tar, and embedding artifacts
+models/
+*.pt
+*.pth
+*.bin
+*.tar
+*.gz
+*.zip
+embeddings/
