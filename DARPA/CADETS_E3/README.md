@@ -6,49 +6,35 @@ The DARPA CADETS E3 project implements a temporal graph neural network for cyber
 ## I. Environment Setup
 
 ### Prerequisites
-- Ubuntu 20.04+ (as specified in the documentation)
-- PostgreSQL 15+ 
-- CUDA-capable GPU (recommended)
+- Ubuntu 24+
+- PostgreSQL 16+ 
+- CUDA-capable GPU (CUDA 12.8)
 - Miniconda/Anaconda
 
-### Step 1: Set up PostgreSQL
+### Step 1: Create Python (Conda) Environment and install dependencies
+Set up the Python environment (3.10):
+```bash
+../../env_setup_310.sh
+```
+
+### Step 2: Set up PostgreSQL
 Run the PostgreSQL setup script from the root directory:
 ```bash
-cd /Users/pietro/code/kairos
-chmod +x postgres_setup.sh
-./postgres_setup.sh
+../../psql_setup.sh
 ```
 
-### Step 2: Create Python Environment
-Set up the Python 3.9 environment:
+### Step 3: Activate Conda Environment
 ```bash
-chmod +x env_setup_39.sh
-./env_setup_39.sh
-```
-
-### Step 3: Activate Environment and Install Dependencies
-```bash
-# Activate the conda environment
-conda activate python39
-
-# Navigate to the CADETS_E3 directory
-cd DARPA/CADETS_E3
-
-# Install additional requirements
-pip install -r ../settings/requirements.txt
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate python310
 ```
 
 ### Step 4: Set up Database for CADETS E3
 Create the specific database for CADETS E3:
 ```bash
-# Execute psql with postgres user
-sudo -u postgres psql
+# Create database schema and tables (tables (SQL commands from DARPA/settings/database.md for CADETS E3)
+./database_setup.sh
 
-# In psql, run the following commands:
-CREATE DATABASE tc_cadet_dataset_db;
-\connect tc_cadet_dataset_db;
-
-# Create tables (copy the SQL commands from DARPA/settings/database.md for CADETS E3)
 ```
 
 
@@ -57,12 +43,11 @@ CREATE DATABASE tc_cadet_dataset_db;
 ### Step 1: Download Raw Data
 ```bash
 # Make the data download script executable and run it
-chmod +x get_data.sh
 ./get_data.sh
 ```
 
 ### Step 2: Configure Data Paths
-Edit config.py to set the correct paths:
+Edit ../src/config.py to set the correct paths:
 ```python
 # Update the raw_dir path to point to your downloaded data
 raw_dir = "/path/to/your/downloaded/cadets_e3_data/"
@@ -71,7 +56,6 @@ raw_dir = "/path/to/your/downloaded/cadets_e3_data/"
 ### Step 3: Decode Binary Files (if needed)
 If you have binary files that need decoding:
 ```bash
-chmod +x decode_binfiles.sh
 # Edit the script to set correct paths, then run:
 ./decode_binfiles.sh
 ```
@@ -86,7 +70,7 @@ make prepare
 
 ### Step 2: Create Database and Parse Raw Data
 ```bash
-make create_database
+make create_data
 ```
 This script (create_database.py) will:
 - Parse JSON log files
@@ -158,6 +142,7 @@ make anomaly_detection
 make pipeline
 ```
 
+
 ## 6. Configuration Details
 
 ### Key Configuration Parameters (in config.py):
@@ -185,6 +170,7 @@ The system expects JSON files with names like:
 2. **CUDA Issues**: Ensure PyTorch is installed with CUDA support
 3. **Memory Issues**: Adjust batch size in config.py if you encounter OOM errors
 4. **Path Issues**: Ensure all paths in config.py are absolute paths
+
 
 ## 8. Output Artifacts
 

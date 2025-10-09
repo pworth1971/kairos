@@ -5,10 +5,10 @@
 ########################################################
 
 # The directory of the raw logs
-raw_dir = "/the/absolute/path/of/cadets_e3/"
+raw_dir = "../data/"
 
 # The directory to save all artifacts
-artifact_dir = "./artifact/"
+artifact_dir = "../artifact/"
 
 # The directory to save the vectorized graphs
 graphs_dir = artifact_dir + "graphs/"
