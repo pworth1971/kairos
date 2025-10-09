@@ -1,21 +1,19 @@
 ##########################################################################################
+# 
 # Some of the code is adapted from:
 # https://github.com/pyg-team/pytorch_geometric/blob/master/examples/tgn.py
+#
 ##########################################################################################
 
 import logging
-
 from kairos_utils import *
-
 from model import *
-
 
 import torch
 from torch_geometric.data.storage import GlobalStorage
 
 # allowlist GlobalStorage so torch.load can unpickle it
 torch.serialization.add_safe_globals([GlobalStorage])
-
 
 
 
@@ -42,6 +40,8 @@ def train(train_data,
           neighbor_loader
           ):
     
+    logger.info(f"-- train() ---")
+
     memory.train()
     gnn.train()
     link_pred.train()
@@ -124,12 +124,16 @@ def train(train_data,
 # Data and model initialization
 # --------------------------------------------------------------------------
 def load_train_data():
+
+    logger.info(f"-- load_train_data() ---")
+
     graph_4_2 = torch.load(graphs_dir + "/graph_4_2.TemporalData.simple").to(device=device)
     graph_4_3 = torch.load(graphs_dir + "/graph_4_3.TemporalData.simple").to(device=device)
     graph_4_4 = torch.load(graphs_dir + "/graph_4_4.TemporalData.simple").to(device=device)
     return [graph_4_2, graph_4_3, graph_4_4]
 
-def init_models(node_feat_size):
+
+def init_models_orig(node_feat_size):
     memory = TGNMemory(
         max_node_num,
         node_feat_size,
@@ -158,20 +162,49 @@ def init_models(node_feat_size):
     return memory, gnn, link_pred, optimizer, neighbor_loader
 
 
-def move_to_device(obj, device):
-    """Recursively move all torch tensors (or lists/dicts) to the target device."""
-    if torch.is_tensor(obj):
-        return obj.to(device, non_blocking=True)
-    elif isinstance(obj, dict):
-        return {k: move_to_device(v, device) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [move_to_device(x, device) for x in obj]
-    else:
-        return obj
+# --------------------------------------------------------------------------------------------
+#   Supports paralleization (simplest form) 
+#   Multi-GPU (DataParallel) Version
+# --------------------------------------------------------------------------------------------
 
+def init_models(node_feat_size):
 
+    logger.info(f"-- init_model(node_feat_size:({node_feat_size}) ---")
 
-MODELS_DIR="./models/"
+    memory = TGNMemory(
+        max_node_num,
+        node_feat_size,
+        node_state_dim,
+        time_dim,
+        message_module=IdentityMessage(node_feat_size, node_state_dim, time_dim),
+        aggregator_module=LastAggregator(),
+    ).to(device)
+
+    gnn = GraphAttentionEmbedding(
+        in_channels=node_state_dim,
+        out_channels=edge_dim,
+        msg_dim=node_feat_size,
+        time_enc=memory.time_enc,
+    ).to(device)
+
+    out_channels = len(include_edge_type)
+    link_pred = LinkPredictor(in_channels=edge_dim, out_channels=out_channels).to(device)
+
+    # ✅ Multi-GPU: wrap models in DataParallel
+    if torch.cuda.device_count() > 1:
+        print(f"[INFO] Using {torch.cuda.device_count()} GPUs with DataParallel.")
+        memory = torch.nn.DataParallel(memory)
+        gnn = torch.nn.DataParallel(gnn)
+        link_pred = torch.nn.DataParallel(link_pred)
+
+    optimizer = torch.optim.Adam(
+        set(memory.parameters()) | set(gnn.parameters()) | set(link_pred.parameters()),
+        lr=lr, eps=eps, weight_decay=weight_decay
+    )
+
+    neighbor_loader = LastNeighborLoader(max_node_num, size=neighbor_size, device=device)
+    return memory, gnn, link_pred, optimizer, neighbor_loader
+
 
 # --------------------------------------------------------------------------
 # Main execution
@@ -205,5 +238,5 @@ if __name__ == "__main__":
     # Save the trained model
     model = [memory, gnn, link_pred, neighbor_loader]
 
-    os.system(f"mkdir -p {MODELS_DIR}")
-    torch.save(model, f"{MODELS_DIR}/models.pt")
+    os.system(f"mkdir -p {models_dir}")
+    torch.save(model, f"{models_dir}/models.pt")
