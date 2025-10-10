@@ -306,7 +306,7 @@ def store_event(file_path, cur, connect, reverse, nodeid2msg, subject_uuid2hash,
 # --------------------------------------------------------------------------
 def show_database_statistics():
     """Print row counts for all tables and event_table breakdown by operation."""
-    cur, connect = init_database_connection()
+    cur, connect = init_database_connection2()
 
     print("\n=== Database Table Row Counts ===")
     tables = [
