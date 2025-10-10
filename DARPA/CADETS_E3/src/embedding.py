@@ -1,16 +1,14 @@
-
-
 import numpy as np
 import logging
-import torch
 import os
 
 from sklearn.feature_extraction import FeatureHasher
-from torch_geometric.data import *
 from tqdm import tqdm
 
-from kairos_utils import *
+import torch
+from torch_geometric.data import *
 
+from kairos_utils import *
 
 
 # Setting for logging
@@ -111,13 +109,20 @@ def gen_relation_onehot():
     torch.save(rel2vec, artifact_dir + "rel2vec")
     return rel2vec
 
+
 def gen_vectorized_graphs(cur, node2higvec, rel2vec, logger):
-    
+    """
+    Generates TemporalData graphs from event_table using embeddings.
+    Ensures all tensors are on the same device to prevent CUDA mismatch.
+    """
+    logger.info(f"[INFO] gen_vectorized_graphs() devce: {device}")
+
     skipped = 0
     
     for day in tqdm(range(2, 14)):
         start_timestamp = datetime_to_ns_time_US('2018-04-' + str(day) + ' 00:00:00')
         end_timestamp = datetime_to_ns_time_US('2018-04-' + str(day + 1) + ' 00:00:00')
+
         sql = """
         select * from event_table
         where
@@ -144,10 +149,8 @@ def gen_vectorized_graphs(cur, node2higvec, rel2vec, logger):
                     raise ValueError(f"Found NoneType in src_index_id ({e[1]}) or dst_index_id ({e[4]}) for event: {e}")
 
                 edge_temp = [int(e[1]), int(e[4]), e[2], e[5]]
-
                 if e[2] in include_edge_type:
                     edge_list.append(edge_temp)
-
             except Exception as ex:
                 skipped += 1
                 print(f"[WARN] Skipping malformed event at day {day}: {ex}")
@@ -165,18 +168,39 @@ def gen_vectorized_graphs(cur, node2higvec, rel2vec, logger):
         for i in edge_list:
             src.append(int(i[0]))
             dst.append(int(i[1]))
+
+            """
             msg.append(
                 torch.cat([torch.from_numpy(node2higvec[i[0]]), rel2vec[i[2]], torch.from_numpy(node2higvec[i[1]])]))
+            """
+            
+            # --- Ensure all tensors are on the same device ---
+            src_vec = torch.from_numpy(node2higvec[i[0]]).float().to(device)
+            dst_vec = torch.from_numpy(node2higvec[i[1]]).float().to(device)
+            rel_vec = rel2vec[i[2]].float().to(device)
+            msg_vec = torch.cat([src_vec, rel_vec, dst_vec], dim=-1)
+            
+            msg.append(msg_vec)
             t.append(int(i[3]))
 
+
+        dataset.src = torch.tensor(src, dtype=torch.long, device=device)
+        dataset.dst = torch.tensor(dst, dtype=torch.long, device=device)
+        dataset.t = torch.tensor(t, dtype=torch.long, device=device)
+        dataset.msg = torch.stack(msg).to(device)
+
+
+        """
         dataset.src = torch.tensor(src)
         dataset.dst = torch.tensor(dst)
         dataset.t = torch.tensor(t)
         dataset.msg = torch.vstack(msg)
+        
         dataset.src = dataset.src.to(torch.long)
         dataset.dst = dataset.dst.to(torch.long)
         dataset.msg = dataset.msg.to(torch.float)
         dataset.t = dataset.t.to(torch.long)
+        """
         
         torch.save(dataset, graphs_dir + "/graph_4_" + str(day) + ".TemporalData.simple")
 
