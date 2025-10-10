@@ -201,9 +201,11 @@ def gen_vectorized_graphs(cur, node2higvec, rel2vec, logger):
         dataset.msg = dataset.msg.to(torch.float)
         dataset.t = dataset.t.to(torch.long)
         """
-        
-        torch.save(dataset, graphs_dir + "/graph_4_" + str(day) + ".TemporalData.simple")
 
+        emeddings_file = graphs_dir + "/graph_4_" + str(day) + ".TemporalData.simple"
+        torch.save(dataset, embeddings_file)
+        
+        logger.info(f'Successfully saved embeddings to {embeddings_file}.')
 
 if __name__ == "__main__":
 

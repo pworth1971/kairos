@@ -1,22 +1,32 @@
 ##########################################################################################
+# 
 # Some of the code is adapted from:
 # https://github.com/pyg-team/pytorch_geometric/blob/master/examples/tgn.py
+#
 ##########################################################################################
 
 import logging
-
 from kairos_utils import *
 from model import *
 
-# Setting for logging
+import torch
+from torch_geometric.data.storage import GlobalStorage
+
+# allowlist GlobalStorage so torch.load can unpickle it
+torch.serialization.add_safe_globals([GlobalStorage])
+
+
+
+# --------------------------------------------------------------------------
+# Logging setup
+# -------------------------------------------------------------------------- 
 logger = logging.getLogger("training_logger")
 logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(artifact_dir + 'training.log')
+file_handler = logging.FileHandler(log_dir + 'training.log')
 file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
-
 
 
 # --------------------------------------------------------------------------
@@ -58,19 +68,27 @@ def train(train_data,
           optimizer,
           neighbor_loader
           ):
-
+    
     logger.info(f"-- train() ---")
 
     memory.train()
     gnn.train()
     link_pred.train()
 
-    memory.reset_state()  # Start with a fresh memory.
-    neighbor_loader.reset_state()  # Start with an empty graph.
+    # Start with a fresh memory, support for DataParallel
+    #memory.reset_state()  
+    if isinstance(memory, torch.nn.DataParallel):
+        memory.module.reset_state()
+    else:
+        memory.reset_state()
+        
+    # Start with an empty graph.
+    neighbor_loader.reset_state()  
 
     total_loss = 0
+    
     #for batch in train_data.seq_batches(batch_size=BATCH):
-
+    
     num_events = train_data.src.size(0)
     for start in range(0, num_events, BATCH):
 
@@ -88,17 +106,22 @@ def train(train_data,
         pos_dst = batch['dst']
         t = batch['t']
         msg = batch['msg']
-
+        
         optimizer.zero_grad()
 
         #src, pos_dst, t, msg = batch.src, batch.dst, batch.t, batch.msg
 
-        n_id = torch.cat([src, pos_dst]).unique()                       # Prepare node neighborhood for message passing
-        n_id, edge_index, e_id = neighbor_loader(n_id)                  # Retrieve neighbors
-        assoc[n_id] = torch.arange(n_id.size(0), device=device)         # Create assoc on the correct device
+        # Prepare node neighborhood for message passing
+        n_id = torch.cat([src, pos_dst]).unique()
+        
+        # Retrieve neighbors
+        n_id, edge_index, e_id = neighbor_loader(n_id)
 
-        # Get updated memory of all nodes involved in the computation.
+        # Create assoc on the correct device
+        assoc[n_id] = torch.arange(n_id.size(0), device=device)
+
         # Forward pass through memory and GNN
+        # Get updated memory of all nodes involved in the computation.
         z, last_update = memory(n_id)
         z = gnn(z, last_update, edge_index, train_data.t[e_id], train_data.msg[e_id])
         pos_out = link_pred(z[assoc[src]], z[assoc[pos_dst]])
@@ -109,24 +132,27 @@ def train(train_data,
         for m in msg:
             l = tensor_find(m[node_embedding_dim:-node_embedding_dim], 1) - 1
             y_true.append(l)
-
         y_true = torch.tensor(y_true).to(device=device)
         y_true = y_true.reshape(-1).to(torch.long).to(device=device)
 
-        # compuet loss and optimization
+        # Loss and optimization
         loss = criterion(y_pred, y_true)
 
         # Update memory and neighbor loader with ground-truth state.
         memory.update_state(src, pos_dst, t, msg)
         neighbor_loader.insert(src, pos_dst)
-
         loss.backward()
         optimizer.step()
-        memory.detach()
 
+        #memory.detach()
+        if isinstance(memory, torch.nn.DataParallel):
+            memory.module.detach()
+        else:
+            memory.detach()
+        
         total_loss += float(loss) * len(src)
-        #total_loss += float(loss) * batch.num_events
-    
+#        total_loss += float(loss) * batch.num_events
+        
     #return total_loss / train_data.num_events
     return total_loss / num_events
 
@@ -135,22 +161,16 @@ def train(train_data,
 # Data and model initialization
 # --------------------------------------------------------------------------
 def load_train_data():
+
     logger.info(f"-- load_train_data() ---")
 
-    #
-    # NB PyTorch 2.6+ now defaults to weights_only=True which blocks unpickling 
-    # arbitrary objects (like torch_geometric.data.storage.GlobalStorage) unless we 
-    # explicitly trust them. So we explictly allow for full model and dependencies pickle
-    # load by setting weights_only=False when we load the file using torch
-    #
-    graph_4_2 = torch.load(graphs_dir+"/graph_4_2.TemporalData.simple", weights_only=False).to(device=device)
-    graph_4_3 = torch.load(graphs_dir+"/graph_4_3.TemporalData.simple", weights_only=False).to(device=device)
-    graph_4_4 = torch.load(graphs_dir+"/graph_4_4.TemporalData.simple", weights_only=False).to(device=device)
-    
+    graph_4_2 = torch.load(graphs_dir + "/graph_4_2.TemporalData.simple").to(device=device)
+    graph_4_3 = torch.load(graphs_dir + "/graph_4_3.TemporalData.simple").to(device=device)
+    graph_4_4 = torch.load(graphs_dir + "/graph_4_4.TemporalData.simple").to(device=device)
     return [graph_4_2, graph_4_3, graph_4_4]
 
 
-def init_models(node_feat_size):
+def init_models_orig(node_feat_size):
     memory = TGNMemory(
         max_node_num,
         node_feat_size,
@@ -179,18 +199,63 @@ def init_models(node_feat_size):
     return memory, gnn, link_pred, optimizer, neighbor_loader
 
 
+# --------------------------------------------------------------------------------------------
+#   Supports paralleization (simplest form) 
+#   Multi-GPU (DataParallel) Version
+# --------------------------------------------------------------------------------------------
+
+def init_models(node_feat_size):
+
+    logger.info(f"-- init_model(node_feat_size:({node_feat_size}) ---")
+
+    memory = TGNMemory(
+        max_node_num,
+        node_feat_size,
+        node_state_dim,
+        time_dim,
+        message_module=IdentityMessage(node_feat_size, node_state_dim, time_dim),
+        aggregator_module=LastAggregator(),
+    ).to(device)
+
+    gnn = GraphAttentionEmbedding(
+        in_channels=node_state_dim,
+        out_channels=edge_dim,
+        msg_dim=node_feat_size,
+        time_enc=memory.time_enc,
+    ).to(device)
+
+    out_channels = len(include_edge_type)
+    link_pred = LinkPredictor(in_channels=edge_dim, out_channels=out_channels).to(device)
+
+    # ✅ Multi-GPU: wrap models in DataParallel
+    if torch.cuda.device_count() > 1:
+        print(f"[INFO] Using {torch.cuda.device_count()} GPUs with DataParallel.")
+        memory = torch.nn.DataParallel(memory)
+        gnn = torch.nn.DataParallel(gnn)
+        link_pred = torch.nn.DataParallel(link_pred)
+
+    optimizer = torch.optim.Adam(
+        set(memory.parameters()) | set(gnn.parameters()) | set(link_pred.parameters()),
+        lr=lr, eps=eps, weight_decay=weight_decay
+    )
+
+    neighbor_loader = LastNeighborLoader(max_node_num, size=neighbor_size, device=device)
+    return memory, gnn, link_pred, optimizer, neighbor_loader
+
+
 # --------------------------------------------------------------------------
 # Main execution
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
-
+    
     start_time = time.time()
-    logger.info("Training...")
+    logger.info("Start logging.")
     logger.info(f"Detected device: {device}")
 
     # Load data for training
     train_data = load_train_data()
-
+    #train_data = [move_to_device(g, device) for g in train_data]
+    
     # Data statistics
     total_events = sum(g.src.size(0) for g in train_data)
     feature_dim = train_data[0].msg.size(-1)
@@ -208,10 +273,10 @@ if __name__ == "__main__":
 
     # train the model
     for epoch in tqdm(range(1, epoch_num+1)):
-
+    
         epoch_start = time.time()
         epoch_loss = 0.0
-
+    
         for g in train_data:
             loss = train(
                 train_data=g,
@@ -227,7 +292,7 @@ if __name__ == "__main__":
         epoch_time = time.time() - epoch_start
         avg_loss = epoch_loss / len(train_data)
         epoch_losses.append(avg_loss)
-
+        
         logger.info(f"Epoch {epoch:02d}/{epoch_num}, Loss: {avg_loss:.4f}, Time: {epoch_time:.2f}s")
         print(f"[INFO] Epoch {epoch:02d}/{epoch_num} completed — Loss: {avg_loss:.4f} | Time: {epoch_time:.2f}s")
 
@@ -237,18 +302,28 @@ if __name__ == "__main__":
             print(f"[EarlyStop] Stopping training early at epoch {epoch}")
             logger.info(f"Early stopping triggered at epoch {epoch}")
             break
-
+        
     total_time = time.time() - start_time
 
-    # Save the trained model
+
+    # Save trained model
+        
+    """
     model = [memory, gnn, link_pred, neighbor_loader]
-
     os.system(f"mkdir -p {models_dir}")
+    torch.save(model, f"{models_dir}/models.pt")
+    """
 
-    model_file = f"{models_dir}/models.pt"
-    torch.save(model, model_file)
-    logger.info(f"Saved model to {model_file}.")
+    model_state = {
+        'memory': memory.module.state_dict() if isinstance(memory, torch.nn.DataParallel) else memory.state_dict(),
+        'gnn': gnn.module.state_dict() if isinstance(gnn, torch.nn.DataParallel) else gnn.state_dict(),
+        'link_pred': link_pred.module.state_dict() if isinstance(link_pred, torch.nn.DataParallel) else link_pred.state_dict(),
+    }
+
+    os.makedirs(models_dir, exist_ok=True)
     
+    torch.save(model_state, f"{models_dir}/models.pt")
+
     # ----------------------------------------------------------------------
     # Summary statistics
     # ----------------------------------------------------------------------
