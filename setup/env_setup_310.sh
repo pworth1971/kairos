@@ -70,13 +70,4 @@ echo "To activate it again later, run:"
 echo "    source /root/miniconda3/etc/profile.d/conda.sh && conda activate $ENV_NAME"
 echo "------------------------------------------------------------"
 
-Environment:
-  - Name: ${ENV_NAME}
-  - Python: ${PY_VERSION}
-  - Installed:
-      * psycopg2, tqdm (conda)
-      * scikit-learn==1.2.0, networkx==2.8.7, xxhash==3.2.0, graphviz==0.20.1 (pip)
-      * PyTorch 1.13.1 + CUDA 11.7, TorchVision 0.14.1, Torchaudio 0.13.1 (conda)
-      * torch_geometric==2.0.0, pyg_lib, torch_scatter, torch_sparse, torch_cluster, torch_spline_conv (pip)
-
 EOF
