@@ -8,7 +8,7 @@ from psycopg2 import extras as ex
 
 from pathlib import Path               
 
-import kairos_utils import 8
+from kairos_utils import *
 
 
 # Path containing your decoded CADETS json shards
@@ -365,7 +365,7 @@ if __name__ == "__main__":
     if args.show:
         show_database_statistics()
     else:
-        cur, connect = init_database_connection()
+        cur, connect = init_database_connection2()
 
         # 🚨 Clear the database first
         print("\n=== Clearing CADETS E3 Dataset ===")

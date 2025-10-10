@@ -30,6 +30,35 @@ logger.addHandler(file_handler)
 
 
 # --------------------------------------------------------------------------
+# Early Stopping Utility
+# --------------------------------------------------------------------------
+class EarlyStopping:
+    """Stop training when validation loss doesn't improve after 'patience' epochs."""
+    def __init__(self, patience=5, min_delta=1e-4, verbose=True):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.verbose = verbose
+        self.counter = 0
+        self.best_loss = np.inf
+        self.early_stop = False
+        self.best_epoch = 0
+
+    def __call__(self, val_loss, epoch):
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.best_epoch = epoch
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.verbose:
+                print(f"[EarlyStop] No improvement for {self.counter}/{self.patience} epochs (best={self.best_loss:.4f})")
+            if self.counter >= self.patience:
+                self.early_stop = True
+                if self.verbose:
+                    print(f"[EarlyStop] Triggered at epoch {epoch}. Best epoch: {self.best_epoch}")
+
+
+# --------------------------------------------------------------------------
 # Training function
 # --------------------------------------------------------------------------
 def train(train_data,
@@ -53,9 +82,9 @@ def train(train_data,
     
     #for batch in train_data.seq_batches(batch_size=BATCH):
     
-    # ---------------- fix for torch_geometric.data.TemporalData object -------------------
     num_events = train_data.src.size(0)
     for start in range(0, num_events, BATCH):
+
         end = min(start + BATCH, num_events)
 
         # Create a mini-batch manually (as a dict)
@@ -71,8 +100,6 @@ def train(train_data,
         t = batch['t']
         msg = batch['msg']
         
-        #--------------------------------- end fix -----------------------------
-
         optimizer.zero_grad()
 
         #src, pos_dst, t, msg = batch.src, batch.dst, batch.t, batch.msg
@@ -98,7 +125,6 @@ def train(train_data,
         for m in msg:
             l = tensor_find(m[node_embedding_dim:-node_embedding_dim], 1) - 1
             y_true.append(l)
-
         y_true = torch.tensor(y_true).to(device=device)
         y_true = y_true.reshape(-1).to(torch.long).to(device=device)
 
@@ -108,7 +134,6 @@ def train(train_data,
         # Update memory and neighbor loader with ground-truth state.
         memory.update_state(src, pos_dst, t, msg)
         neighbor_loader.insert(src, pos_dst)
-
         loss.backward()
         optimizer.step()
         memory.detach()
@@ -232,6 +257,7 @@ if __name__ == "__main__":
 
     # Training loop
     epoch_losses = []
+    early_stopper = EarlyStopping(patience=5, min_delta=1e-3, verbose=True)
 
     # train the model
     for epoch in tqdm(range(1, epoch_num+1)):
@@ -257,6 +283,13 @@ if __name__ == "__main__":
         logger.info(f"Epoch {epoch:02d}/{epoch_num}, Loss: {avg_loss:.4f}, Time: {epoch_time:.2f}s")
         print(f"[INFO] Epoch {epoch:02d}/{epoch_num} completed — Loss: {avg_loss:.4f} | Time: {epoch_time:.2f}s")
 
+        # --- Early Stopping Check ---
+        early_stopper(avg_loss, epoch)
+        if early_stopper.early_stop:
+            print(f"[EarlyStop] Stopping training early at epoch {epoch}")
+            logger.info(f"Early stopping triggered at epoch {epoch}")
+            break
+        
     total_time = time.time() - start_time
 
 
