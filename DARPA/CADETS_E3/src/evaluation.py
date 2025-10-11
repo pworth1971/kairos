@@ -1,23 +1,58 @@
+
+##########################################################################################
+# Evaluation Script for Provenance-based Intrusion Detection (CADETS_E3)
+#
+# Purpose:
+#   - Compare detected anomalous time windows against ground-truth attack intervals
+#   - Compute performance metrics: Precision, Recall, F1, Accuracy, AUC
+#   - Log confusion matrix elements and per-metric scores
+#
+# Workflow:
+#   1. Load anomaly "history lists" (graph_4_6, graph_4_7)
+#   2. Calculate anomaly scores per queue
+#   3. Mark time windows as predicted attacks if anomaly score > β threshold
+#   4. Compare with known attack intervals (ground_truth_label)
+#   5. Output detailed metrics + summary
+##########################################################################################
+
+
+
 from sklearn.metrics import confusion_matrix
 import logging
 
 from kairos_utils import *
-from config import *
 from model import *
 
 
-# Setting for logging
+# --------------------------------------------------------------------------
+# Logging setup
+# --------------------------------------------------------------------------
 logger = logging.getLogger("evaluation_logger")
 logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(artifact_dir + 'evaluation.log')
+file_handler = logging.FileHandler(log_dir + 'evaluation.log')
 file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 
+# --------------------------------------------------------------------------
+# Helper: Evaluate classifier metrics
+# --------------------------------------------------------------------------
 def classifier_evaluation(y_test, y_test_pred):
+    """
+    Compute confusion matrix and derived metrics.
+
+    Args:
+        y_test (list[int]): Ground truth labels (0 = benign, 1 = attack)
+        y_test_pred (list[int]): Predicted labels from the model
+
+    Returns:
+        precision, recall, fscore, accuracy, auc_val
+    """
+
     tn, fp, fn, tp =confusion_matrix(y_test, y_test_pred).ravel()
+
     logger.info(f'tn: {tn}')
     logger.info(f'fp: {fp}')
     logger.info(f'fn: {fn}')
@@ -28,14 +63,35 @@ def classifier_evaluation(y_test, y_test_pred):
     accuracy=(tp+tn)/(tp+tn+fp+fn)
     fscore=2*(precision*recall)/(precision+recall)
     auc_val=roc_auc_score(y_test, y_test_pred)
-    logger.info(f"precision: {precision}")
-    logger.info(f"recall: {recall}")
-    logger.info(f"fscore: {fscore}")
-    logger.info(f"accuracy: {accuracy}")
-    logger.info(f"auc_val: {auc_val}")
+
+    # Log detailed stats
+    logger.info(f"Confusion Matrix → TN:{tn} FP:{fp} FN:{fn} TP:{tp}")
+    logger.info(f"Precision:{precision:.4f} Recall:{recall:.4f} F1:{fscore:.4f} Accuracy:{accuracy:.4f} AUC:{auc_val:.4f}")
+
+    # Print summary to console
+    print("\n📊 Evaluation Metrics Summary:")
+    print(f"  True Negatives : {tn}")
+    print(f"  False Positives: {fp}")
+    print(f"  False Negatives: {fn}")
+    print(f"  True Positives : {tp}")
+    print(f"  Precision: {precision:.4f}")
+    print(f"  Recall:    {recall:.4f}")
+    print(f"  F1-Score:  {fscore:.4f}")
+    print(f"  Accuracy:  {accuracy:.4f}")
+    print(f"  AUC:       {auc_val:.4f}\n")
+
     return precision,recall,fscore,accuracy,auc_val
 
+
+# --------------------------------------------------------------------------
+# Ground truth: known attack intervals for CADETS E3
+# --------------------------------------------------------------------------
 def ground_truth_label():
+    """
+    Create a mapping of time-window filenames → labels.
+    Windows that correspond to known attack periods are labeled 1.
+    """
+
     labels = {}
     filelist = os.listdir(f"{artifact_dir}/graph_4_6")
     for f in filelist:
@@ -55,7 +111,16 @@ def ground_truth_label():
 
     return labels
 
+
+# --------------------------------------------------------------------------
+# Helper: Optional diagnostic — count number of attack edges by IP/keyword
+# --------------------------------------------------------------------------
 def calc_attack_edges():
+    """
+    Searches anomalous edge logs for known malicious indicators (IP, process names).
+    Used to sanity-check reconstruction accuracy.
+    """
+
     def keyword_hit(line):
         attack_nodes = [
             'vUgefal',
@@ -92,13 +157,20 @@ def calc_attack_edges():
         for line in f:
             if keyword_hit(line):
                 attack_edge_count += 1
-    logger.info(f"Num of attack edges: {attack_edge_count}")
 
+    logger.info(f"Detected attack-related edges: {attack_edge_count}")
+    print(f"Detected attack-related edges: {attack_edge_count}")
+
+
+# --------------------------------------------------------------------------
+# Main Evaluation Execution
+# --------------------------------------------------------------------------
 if __name__ == "__main__":
+
     logger.info("Start logging.")
 
-    # Validation date
-    anomalous_queue_scores = []
+    # Step 1. Validation set → find maximum observed anomaly score (Validation date)
+    anomalous_queue_scores = []                                         
     history_list = torch.load(f"{artifact_dir}/graph_4_5_history_list")
     for hl in history_list:
         anomaly_score = 0
@@ -116,10 +188,12 @@ if __name__ == "__main__":
         # logger.info(f"Anomaly score: {anomaly_score}")
 
         anomalous_queue_scores.append(anomaly_score)
-    logger.info(f"The largest anomaly score in validation set is: {max(anomalous_queue_scores)}\n")
 
+    max_val_score = max(anomalous_queue_scores)
+    logger.info(f"Max anomaly score in validation: {max_val_score:.4f}")
+    print(f"\n[Validation] Max Anomaly Score: {max_val_score:.4f}")
 
-    # Evaluating the testing set
+    # Step 2. Evaluate testing set (graph_4_6 & graph_4_7)
     pred_label = {}
 
     filelist = os.listdir(f"{artifact_dir}/graph_4_6/")
@@ -130,6 +204,7 @@ if __name__ == "__main__":
     for f in filelist:
         pred_label[f] = 0
 
+    # Graph 4_6 and 4_7 - apply detection threshold
     history_list = torch.load(f"{artifact_dir}/graph_4_6_history_list")
     for hl in history_list:
         anomaly_score = 0
@@ -166,11 +241,27 @@ if __name__ == "__main__":
                 pred_label[i]=1
             logger.info(f"Anomaly score: {anomaly_score}")
 
-    # Calculate the metrics
+    # Step 3. Evaluate performance vs ground truth
     labels = ground_truth_label()
     y = []
     y_pred = []
     for i in labels:
         y.append(labels[i])
         y_pred.append(pred_label[i])
-    classifier_evaluation(y, y_pred)
+
+    precision, recall, fscore, accuracy, auc_val = classifier_evaluation(y, y_pred)
+
+    # Step 4. Optional diagnostic for edge-level indicators
+    calc_attack_edges()
+
+    # Step 5. Print summary to console
+    print("\n================ Evaluation Summary ================")
+    print(f"Validation Max Anomaly Score: {max_val_score:.4f}")
+    print(f"Test Set Precision : {precision:.4f}")
+    print(f"Test Set Recall    : {recall:.4f}")
+    print(f"Test Set F1-Score  : {fscore:.4f}")
+    print(f"Test Set Accuracy  : {accuracy:.4f}")
+    print(f"Test Set AUC       : {auc_val:.4f}")
+    print("===================================================")
+
+    logger.info("Evaluation complete.")

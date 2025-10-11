@@ -8,7 +8,7 @@ from config import *
 # Setting for logging
 logger = logging.getLogger("anomalous_queue_logger")
 logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(artifact_dir + 'anomalous_queue.log')
+file_handler = logging.FileHandler(log_dir + 'anomalous_queue.log')
 file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 file_handler.setFormatter(formatter)

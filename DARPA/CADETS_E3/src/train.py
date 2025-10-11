@@ -11,7 +11,7 @@ from model import *
 # Setting for logging
 logger = logging.getLogger("training_logger")
 logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(artifact_dir + 'training.log')
+file_handler = logging.FileHandler(log_dir + 'training.log')
 file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 file_handler.setFormatter(formatter)
