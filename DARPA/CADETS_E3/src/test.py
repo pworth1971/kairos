@@ -72,7 +72,7 @@ def test(inference_data,
     pos_o = []
 
     # Record the running time to evaluate the performance
-    start = time.perf_counter()
+    start_clock = time.perf_counter()
 
     #
     # Loop through temporal batches of events
@@ -83,7 +83,7 @@ def test(inference_data,
     print(f"[INFO] Starting reconstruction on {num_events:,} events...")
 
     # Initialize progress bar
-    progress_bar = tqdm(range(0, num_events, BATCH), desc="Reconstructing", ncols=100)
+    progress_bar = tqdm(range(0, num_events, BATCH), desc="Reconstructing", ncols=200)
 
     for start in progress_bar:
         end = min(start + BATCH, num_events)
@@ -113,23 +113,23 @@ def test(inference_data,
         # Predictions (pos_out) — compare to ground truth (y_true)
         pos_out = link_pred(z[assoc[src]], z[assoc[pos_dst]])
 
+        # Compute ground truth (true edge type index)
         pos_o.append(pos_out)
-        y_pred = torch.cat([pos_out], dim=0)
         y_true = []
-
         # Extract ground-truth relation type from the message tensor
         # Each msg = [src_emb | relation_emb | dst_emb]
         # We slice the middle section (relation_emb) and find where the label == 1
         for m in msg:
             l = tensor_find(m[node_embedding_dim:-node_embedding_dim], 1) - 1
-            y_true.append(l)
-        
+            y_true.append(l)        
         y_true = torch.tensor(y_true).to(device=device)
         y_true = y_true.reshape(-1).to(torch.long).to(device=device)
 
         # Compute loss
+        y_pred = torch.cat([pos_out], dim=0)
         loss = criterion(y_pred, y_true)
-        total_loss += float(loss) * batch.num_events
+        total_loss += float(loss) * num_events_batch
+        event_count += num_events_batch
 
         # Update temporal memory (stateful)
         # update the edges in the batch to the memory and neighbor_loader
@@ -162,17 +162,21 @@ def test(inference_data,
 
             edge_list.append(temp_dic)
 
+        total_edges += num_events_batch
+        progress_bar.set_postfix({"loss": f"{loss:.4f}", "edges": total_edges})
+
+        # Time Window Checkpointing: 
         # Write results at end of a time window
-        event_count += len(batch.src)
         if t[-1] > start_time + time_window_size:
             # Here is a checkpoint, which records all edge losses in the current time window
             time_interval = ns_time_to_datetime_US(start_time) + "~" + ns_time_to_datetime_US(t[-1])
+            end_clock = time.perf_counter()
 
-            end = time.perf_counter()
+            avg_loss = total_loss / event_count
             time_with_loss[time_interval] = {'loss': loss,
                                              'nodes_count': len(unique_nodes),
                                              'total_edges': total_edges,
-                                             'costed_time': (end - start)}
+                                             'costed_time': (end_clock - start_clock)}
 
             # Write per-edge logs sorted by loss
             log = open(path + "/" + time_interval + ".txt", 'w')
@@ -180,7 +184,7 @@ def test(inference_data,
                 loss += e['loss']
             loss = loss / event_count
             logger.info(
-                f'Time: {time_interval}, Loss: {loss:.4f}, Nodes_count: {len(unique_nodes)}, Edges_count: {event_count}, Cost Time: {(end - start):.2f}s')
+                f'Time: {time_interval}, Loss: {loss:.4f}, Nodes_count: {len(unique_nodes)}, Edges_count: {event_count}, Cost Time: {(end_clock - start_clock):.2f}s')
             # Rank the results based on edge losses
             edge_list = sorted(edge_list, key=lambda x: x['loss'], reverse=True)  
             for e in edge_list:
