@@ -15,10 +15,51 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 
+##########################################################################################
+# Anomalous Queue Construction
+#
+# This script post-processes the temporal reconstruction losses produced by the model
+# to identify time windows containing clusters of anomalous activity.
+#
+# It computes:
+#   - Per-node "inverse document frequency" (IDF) scores to weigh node rarity
+#   - Per-time-window anomaly metrics (based on edge reconstruction losses)
+#   - Cross-window relationships (via shared rare nodes) to form temporal "queues"
+#     of related anomalies, reflecting long-term multi-step attack behavior.
+#
+# Outputs:
+#   - node_IDF: per-node rarity weights (saved to artifact_dir)
+#   - *_history_list: serialized anomaly queue structures for visualization and analysis
+#
+# Typical workflow:
+#   1. Model outputs per-edge reconstruction losses per day (in graph_4_5, graph_4_6, etc.)
+#   2. This script aggregates those results and links related anomalies across days.
+##########################################################################################
+
+
+# --------------------------------------------------------------------------
+# Function: cal_anomaly_loss
+# Purpose: Identify anomalous edges within a single time window
+# --------------------------------------------------------------------------
 def cal_anomaly_loss(loss_list, edge_list):
+    """
+    Given per-edge reconstruction losses, determine which edges are anomalous.
+
+    Args:
+        loss_list (list[float]): list of per-edge reconstruction losses
+        edge_list (list[list[str]]): corresponding source/dest node pairs
+
+    Returns:
+        count (int): number of anomalous edges
+        avg_loss (float): mean loss of anomalous edges
+        node_set (set): nodes participating in anomalies
+        edge_set (set): unique anomalous edges
+    """
+
     if len(loss_list) != len(edge_list):
         print("error!")
         return 0
+    
     count = 0
     loss_sum = 0
     loss_std = std(loss_list)
@@ -26,9 +67,9 @@ def cal_anomaly_loss(loss_list, edge_list):
     edge_set = set()
     node_set = set()
 
+    # Define anomaly threshold as mean + 1.5 * stddev
     thr = loss_mean + 1.5 * loss_std
-
-    logger.info(f"thr:{thr}")
+    logger.info(f"Anomaly threshold (mean + 1.5σ): {thr}")
 
     for i in range(len(loss_list)):
         if loss_list[i] > thr:
@@ -40,14 +81,35 @@ def cal_anomaly_loss(loss_list, edge_list):
             node_set.add(src_node)
             node_set.add(dst_node)
             edge_set.add(edge_list[i][0] + edge_list[i][1])
+    
+    # Return metrics for this time window
     return count, loss_sum / count, node_set, edge_set
 
-def compute_IDF():
-    node_IDF = {}
 
+
+# --------------------------------------------------------------------------
+# Function: compute_IDF
+# Purpose: Compute per-node rarity weights across all observed time windows
+# --------------------------------------------------------------------------
+def compute_IDF():
+    """
+    Computes an Inverse Document Frequency (IDF) score for each node:
+    - Nodes that appear in fewer time windows get higher IDF (rarer).
+    - Common system nodes (e.g., /proc, /usr) are filtered or down-weighted.
+
+    Returns:
+        node_IDF (dict): mapping node string → rarity weight
+        file_list (list): list of processed time window files
+    """
+
+    #
+    # Collect all anomaly result files across multiple days
+    # 
+    node_IDF = {}
     file_list = []
     file_path = artifact_dir + "graph_4_3/"
     file_l = os.listdir(file_path)
+    
     for i in file_l:
         file_list.append(file_path + i)
 
@@ -61,6 +123,7 @@ def compute_IDF():
     for i in file_l:
         file_list.append(file_path + i)
 
+    # Build node occurrence sets
     node_set = {}
     for f_path in tqdm(file_list):
         f = open(f_path)
@@ -78,6 +141,8 @@ def compute_IDF():
                         node_set[str(jdata['dstmsg'])] = {f_path}
                     else:
                         node_set[str(jdata['dstmsg'])].add(f_path)
+    
+    # Compute IDF: log(total_files / (1 + count_in_files))
     for n in node_set:
         include_count = len(node_set[n])
         IDF = math.log(len(file_list) / (include_count + 1))
@@ -87,10 +152,26 @@ def compute_IDF():
     logger.info("IDF weight calculate complete!")
     return node_IDF, file_list
 
-# Measure the relationship between two time windows, if the returned value
+
+# --------------------------------------------------------------------------
+# Function: cal_set_rel
+# Purpose: Quantify overlap between anomalous node sets in two time windows
+# Method: Measure the relationship between two time windows, if the returned value
 # is not 0, it means there are suspicious nodes in both time windows.
+# --------------------------------------------------------------------------
 def cal_set_rel(s1, s2, node_IDF, tw_list):
+    """
+    Measures whether two time windows share rare anomalous nodes.
+    This helps link anomalies across time (building the "queue").
+
+    Returns:
+        count (int): number of rare overlapping nodes between windows
+    """
+
     def is_include_key_word(s):
+        """
+        Filters out common or uninformative system nodes (noise).
+        """
         # The following common nodes don't exist in the training/validation data, but
         # will have the influences to the construction of anomalous queue (i.e. noise).
         # These nodes frequently exist in the testing data but don't contribute much to
@@ -135,7 +216,16 @@ def cal_set_rel(s1, s2, node_IDF, tw_list):
             count += 1
     return count
 
+# --------------------------------------------------------------------------
+# Function: anomalous_queue_construction
+# Purpose: Build sequences of related anomalies (queues) across time windows
+# --------------------------------------------------------------------------
 def anomalous_queue_construction(node_IDF, tw_list, graph_dir_path):
+    """
+    Iterates through anomaly logs for each day/time window, computes anomalous edges,
+    and connects temporally adjacent windows sharing rare nodes.
+    """
+
     history_list = []
     current_tw = {}
 
@@ -178,7 +268,7 @@ def anomalous_queue_construction(node_IDF, tw_list, graph_dir_path):
 
         index_count += 1
 
-
+        # Log summary metrics for this time window
         logger.info(f"Average loss: {loss_avg}")
         logger.info(f"Num of anomalous edges within the time window: {count}")
         logger.info(f"Percentage of anomalous edges: {count / len(edge_list)}")
@@ -189,8 +279,11 @@ def anomalous_queue_construction(node_IDF, tw_list, graph_dir_path):
     return history_list
 
 
+# --------------------------------------------------------------------------
+# Main Execution: Compute anomaly queues for validation and test datasets
+# --------------------------------------------------------------------------
 if __name__ == "__main__":
-    logger.info("Start logging.")
+    logger.info("Starting Anomalous Queue Construction...")
 
     node_IDF, tw_list = compute_IDF()
 

@@ -34,6 +34,36 @@ logger.addHandler(file_handler)
 
 @torch.no_grad()            # Disable gradient tracking — inference only
 
+
+"""
+This reconstruction module evaluates the trained Temporal Graph Network (TGN) 
+by replaying the temporal event stream and measuring reconstruction loss per edge.
+
+BATCHING LOGIC:
+- The inference data (TemporalData) is divided into sequential batches of event edges 
+  based on a fixed BATCH size. Each batch contains slices of (src, dst, t, msg) tensors 
+  representing consecutive temporal interactions.
+
+GROUND TRUTH:
+- Each edge’s ground-truth relation type (e.g., EVENT_READ, EVENT_WRITE, EVENT_EXECUTE, etc.)
+  is embedded in the message tensor (msg). The code extracts this relation index from 
+  the middle section of the message embedding and treats it as the target label (y_true).
+
+RECONSTRUCTION:
+- For each batch, the model rebuilds the subgraph context by collecting all unique nodes 
+  touched by the edges and using the neighbor loader to construct a local temporal neighborhood.
+- The model then performs a forward pass through the temporal memory, GNN, and link predictor
+  to reconstruct the expected relation type for each edge.
+- The reconstruction error (typically a cross-entropy loss) measures how well the model predicts 
+  the true relation type.
+
+ANOMALY DETECTION:
+- Each edge’s reconstruction loss acts as its anomaly score — a higher loss implies the model 
+  found the interaction behavior unusual or unexpected.
+- Losses are accumulated and averaged within defined temporal windows (based on time_window_size),
+  producing time-window-level anomaly summaries and detailed per-edge rankings.
+"""
+
 def test(inference_data,
           memory,
           gnn,
