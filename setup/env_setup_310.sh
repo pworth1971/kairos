@@ -48,7 +48,7 @@ conda install -y psycopg2 tqdm pytz scikit-learn
 
 # Step 7. Install pinned pip packages
 echo "Installing pinned pip packages..."
-pip install networkx xxhash graphviz gdown torch_geometric pytz psycopg2-binary xxhash
+pip install networkx xxhash graphviz gdown torch_geometric pytz psycopg2-binary xxhash python-louvain
 
 
 # Step 8. Install PyTorch GPU + PyG stack
@@ -56,12 +56,17 @@ echo "Installing PyTorch CUDA 12.8..."
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 
+# Step 9. Install Graphviz libraries
+echo "Installing Graphviz libraries..."
+sudo apt install -y graphviz
+
+
 # Summary
 cat <<EOF
 
 ✅ Kairos environment setup complete!
 
-# Step 9: Final message
+# Step 10: Final message
 echo "------------------------------------------------------------"
 echo "✅ Git configured: $(git config --global user.name) <$(git config --global user.email)>"
 echo "✅ Conda environment '$ENV_NAME' (Python $PY_VER) created and activated"
