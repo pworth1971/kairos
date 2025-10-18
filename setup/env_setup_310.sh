@@ -46,19 +46,19 @@ conda update --all
 conda install -y psycopg2 tqdm pytz scikit-learn
 
 
-# Step 7. Install pinned pip packages
-echo "Installing pinned pip packages..."
-pip install networkx xxhash graphviz gdown torch_geometric pytz psycopg2-binary xxhash python-louvain
-
-
-# Step 8. Install PyTorch GPU + PyG stack
-echo "Installing PyTorch CUDA 12.8..."
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-
-
-# Step 9. Install Graphviz libraries
+# Step 7. Install Graphviz libraries
 echo "Installing Graphviz libraries..."
 sudo apt install -y graphviz
+
+
+# Step 8. Install pinned pip packages
+echo "Installing pinned pip packages..."
+pip install networkx xxhash graphviz gdown torch_geometric pytz psycopg2-binary xxhash python-louvain flask
+
+
+# Step 9. Install PyTorch GPU + PyG stack
+echo "Installing PyTorch CUDA 12.8..."
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 
 # Summary
