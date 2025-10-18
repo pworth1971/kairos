@@ -35,6 +35,105 @@ except (ImportError, AttributeError):
     get_db_conn = None  # type: ignore[assignment]
 
 
+#ABUSEIPDB_KEY = os.getenv("ABUSEIPDB_KEY")
+ABUSEIPDB_KEY = "71d961684abf684ec69b07f0ba703be209d6d6936ba277bfe51baf9ce35252c47bf4b898c09a0140"
+
+import requests
+import time
+class AbuseIPDBClient:
+    def __init__(self, api_key: Optional[str]):
+        self.api_key = api_key
+        self.session = requests.Session() if api_key and requests else None
+        self.cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        self.next_allowed = 0.0
+
+    def lookup(self, ip: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not ip or not self.session:
+            return None
+        if ip in self.cache:
+            return self.cache[ip]
+        now = time.time()
+        if now < self.next_allowed:
+            time.sleep(self.next_allowed - now)
+        try:
+            resp = self.session.get(
+                "https://api.abuseipdb.com/api/v2/check",
+                params={"ipAddress": ip, "maxAgeInDays": 90},
+                headers={"Key": self.api_key, "Accept": "application/json"},
+                timeout=5,
+            )
+            self.next_allowed = time.time() + 1.5
+            if resp.status_code == 200:
+                data = resp.json().get("data", {})
+                result = {
+                    "abuseConfidenceScore": data.get("abuseConfidenceScore", 0),
+                    "totalReports": data.get("totalReports", 0),
+                    "isAbusive": data.get("abuseConfidenceScore", 0) >= 50,
+                    "categories": data.get("categories", []),
+                }
+                self.cache[ip] = result
+                return result
+        except Exception as exc:
+            print(f"[WARN] AbuseIPDB lookup failed for {ip}: {exc}")
+        self.cache[ip] = None
+        return None
+    
+
+SAMPLE_ATTACK_ENABLED = "1"         # 1 == enabled
+
+
+def inject_sample_attack(graph: nx.DiGraph) -> None:
+    if not SAMPLE_ATTACK_ENABLED:
+        return
+
+    process_msg = "{'subject': {'uuid': 'sample-proc-uuid', 'type': 'SUBJECT_PROCESS', 'cmdline': '/usr/bin/python attacker.py'}}"
+    netflow_msg = "{'netflow': {'uuid': 'sample-netflow-uuid', 'type': 'NETFLOW', 'remoteAddress': '81.49.200.166', 'remotePort': 4444}}"
+
+    proc_id = str(hashgen(replace_path_name(process_msg)))
+    net_id = str(hashgen(replace_path_name(netflow_msg)))
+
+    graph.add_node(
+        proc_id,
+        msg=process_msg,
+        msg_display=replace_path_name(process_msg),
+        attack_flag=attack_edge_flag(process_msg),
+        entity=parse_entity(process_msg),
+        frequency=1,
+    )
+    graph.add_node(
+        net_id,
+        msg=netflow_msg,
+        msg_display=replace_path_name(netflow_msg),
+        attack_flag=attack_edge_flag(netflow_msg),
+        entity=parse_entity(netflow_msg),
+        frequency=1,
+        network_context={
+            "remote_address": "81.49.200.166",
+            "remote_port": 4444,
+            "protocol": "tcp",
+            "suspicious_ip": True,
+            "abuse_ipdb": {
+                "abuseConfidenceScore": 85,
+                "totalReports": 12,
+                "isAbusive": True,
+                "categories": ["Brute-Force", "Malware"],
+            },
+        },
+    )
+    graph.add_edge(
+        proc_id,
+        net_id,
+        loss=5.0,
+        edge_type="EVENT_CONNECT",
+        time_ns=1523020496000000000,
+        time_iso="2018-04-06T12:34:56Z",
+        srcmsg=process_msg,
+        dstmsg=netflow_msg,
+        synthetic=True,
+    )
+
+
+    
 # --------------------------------------------------------------------------
 # Path abstraction dictionary
 # --------------------------------------------------------------------------
@@ -237,6 +336,13 @@ def build_attack_graph(attack_paths: Iterable[str]) -> nx.DiGraph:
             timestamp_dt = (
                 ns_time_to_datetime(timestamp_ns) if timestamp_ns is not None else None
             )
+            
+            if isinstance(timestamp_dt, str):
+                timestamp_iso = timestamp_dt
+            elif timestamp_dt is not None:
+                timestamp_iso = timestamp_dt.isoformat()
+            else:
+                timestamp_iso = None
 
             graph.add_edge(
                 src_id,
@@ -244,7 +350,8 @@ def build_attack_graph(attack_paths: Iterable[str]) -> nx.DiGraph:
                 loss=record.get("loss", 0.0),
                 edge_type=record.get("edge_type"),
                 time_ns=timestamp_ns,
-                time_iso=timestamp_dt.isoformat() if timestamp_dt else None,
+                #time_iso=timestamp_dt.isoformat() if timestamp_dt else None,
+                time_iso=timestamp_iso,
                 srcmsg=src_msg,
                 dstmsg=dst_msg,
             )
@@ -267,11 +374,13 @@ def build_attack_graph(attack_paths: Iterable[str]) -> nx.DiGraph:
 class AttackGraphEnricher:
     def __init__(self, conn=None):
         self.conn = conn
-
+        self.abuseipdb = AbuseIPDBClient(ABUSEIPDB_KEY)
+        
     def enrich_graph(self, graph: nx.DiGraph) -> None:
         self._enrich_nodes(graph)
         temporal = TemporalEnricher()
         temporal.analyze(graph)
+        self._attach_abuseipdb_to_edges(graph)
         context = self._build_context(graph)
 
         for src, dst, attrs in graph.edges(data=True):
@@ -397,6 +506,7 @@ class AttackGraphEnricher:
                     "remote_port": remote_port,
                     "protocol": protocol,
                     "suspicious_ip": is_suspicious_ip(remote_addr),
+                    "abuseipdb": self.abuse_client.lookup(remote_addr),
                 },
                 "first_seen": first_seen.isoformat() if first_seen else None,
                 "last_seen": last_seen.isoformat() if last_seen else None,
@@ -412,8 +522,12 @@ class AttackGraphEnricher:
             score += 40
         if attrs.get("frequency", 0) < 3:
             score += 15
+        net_ctx = metadata.get("network_context", {})
         if metadata.get("network_context", {}).get("suspicious_ip"):
             score += 30
+        abuse_info = net_ctx.get("abuse_ipdb")
+        if abuse_info and abuse_info.get("abuseConfidenceScore", 0) >= 50:
+            score += 40
         if metadata.get("cmdline") and "nc" in metadata["cmdline"]:
             score += 20
         return min(score, 100)
@@ -461,6 +575,24 @@ class AttackGraphEnricher:
         if attack_edge_flag(edge_attrs.get("dstmsg", "")):
             score += 15
         return min(score, 100)
+    
+    def _attach_abuseipdb_to_edges(self, graph: nx.DiGraph) -> None:
+        for src, dst, attrs in graph.edges(data=True):
+            abuse_sources = []
+            for node_id in (src, dst):
+                node_ctx = graph.nodes[node_id].get("network_context", {})
+                abuse_info = node_ctx.get("abuse_ipdb")
+                if abuse_info:
+                    abuse_sources.append(
+                        {
+                            "node": node_id,
+                            "abuseConfidenceScore": abuse_info.get("abuseConfidenceScore"),
+                            "isAbusive": abuse_info.get("isAbusive"),
+                            "totalReports": abuse_info.get("totalReports"),
+                        }
+                    )
+            if abuse_sources:
+                attrs["abuse_ipdb"] = abuse_sources
 
 
 class TemporalEnricher:
@@ -549,6 +681,14 @@ def render_communities(
             importance = attrs.get("importance_score", 0)
             edge_color = "red" if importance >= 70 else "dodgerblue2"
             label = f"{attrs.get('edge_type')} (L={attrs.get('loss', 0.0):.3f})"
+            
+            abuse_sources = attrs.get("abuse_ipdb")
+            if abuse_sources:
+                abuse_scores = ",".join(
+                    f"{item['node']}:{item['abuseConfidenceScore']}"
+                    for item in abuse_sources
+                )
+                label += f"\nAbuseIPDB={abuse_scores}"
             dot.edge(src, dst, label=label, color=edge_color)
 
         outfile = os.path.join(output_dir, f"subgraph_{idx}")
@@ -634,6 +774,7 @@ def main(
 ) -> None:
     attack_paths = attack_paths or DEFAULT_ATTACK_LIST
     graph = build_attack_graph(attack_paths)
+    inject_sample_attack(graph)
     if graph.number_of_edges() == 0:
         print("[WARN] No anomalous edges passed the threshold; nothing to visualize.")
         return

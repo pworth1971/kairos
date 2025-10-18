@@ -88,6 +88,10 @@ evaluation:
 attack_investigation:
 	python ../src/attack_investigation.py
 
+attack_investigation_enhanced:
+	python ../src/attack_investigation_enhanced.py
+
+
 
 # ------------------------------------------------------------------------------
 # High-level pipeline shortcuts
