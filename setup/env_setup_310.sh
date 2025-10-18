@@ -2,8 +2,9 @@
 set -e
 
 # -----------------------------------------------------------------------------
-# Script: setup.sh
-# Purpose: Install Python 3.10 env and PostgreSQL 18
+# Script: setup_env.sh
+# Purpose: Install Python 3.10 environment (Conda), PostgreSQL, and libraries
+# Compatible with macOS (Homebrew) and Ubuntu (APT)
 # -----------------------------------------------------------------------------
 
 # Variables
@@ -11,68 +12,102 @@ ENV_NAME="python310"
 PY_VER="3.10"
 GIT_USER_NAME="Peter Worth"
 GIT_USER_EMAIL="peterworthjr@gmail.com"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 
-# Step 1: Update apt and install essentials
-echo "[*] Updating apt and installing prerequisites..."
-sudo apt update
-sudo apt install -y git wget bzip2 curl gnupg lsb-release software-properties-common
+echo "[*] Detected OS: $OS"
 
-# Step 2: Configure git global settings
-echo "[*] Configuring git global user..."
+# -----------------------------------------------------------------------------
+# Step 1: Install prerequisites
+# -----------------------------------------------------------------------------
+if [[ "$OS" == "darwin" ]]; then
+    echo "[*] macOS detected — using Homebrew..."
+    # Install Homebrew if not installed
+    if ! command -v brew &> /dev/null; then
+        echo "[*] Installing Homebrew..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    fi
+
+    echo "[*] Installing system dependencies..."
+    brew install git wget curl graphviz postgresql@16
+
+else
+    echo "[*] Ubuntu detected — using apt..."
+    sudo apt update -y
+    sudo apt install -y git wget bzip2 curl gnupg lsb-release software-properties-common graphviz
+fi
+
+# -----------------------------------------------------------------------------
+# Step 2: Configure Git
+# -----------------------------------------------------------------------------
+echo "[*] Configuring Git..."
 git config --global user.name "$GIT_USER_NAME"
 git config --global user.email "$GIT_USER_EMAIL"
 
-# Step 3: Create Python 3.10 environment
-echo "[*] Creating conda environment '$ENV_NAME' with Python $PY_VER..."
-conda create -y -n "$ENV_NAME" python="$PY_VER"
-
-# Step 4: Source conda.sh so conda activate works in this shell
-if [ -f "/root/miniconda3/etc/profile.d/conda.sh" ]; then
-    echo "[*] Sourcing conda.sh..."
-    source /root/miniconda3/etc/profile.d/conda.sh
+# -----------------------------------------------------------------------------
+# Step 3: Install or Update Conda
+# -----------------------------------------------------------------------------
+if ! command -v conda &> /dev/null; then
+    echo "[*] Installing Miniconda..."
+    wget -O miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+    bash miniconda.sh -b -p "$HOME/miniconda3"
+    rm miniconda.sh
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
 else
-    echo "[!] Could not find /root/miniconda3/etc/profile.d/conda.sh"
-    echo "    Make sure Miniconda/Conda is installed in /root/miniconda3"
+    echo "[*] Conda already installed."
+    source "$(conda info --base)/etc/profile.d/conda.sh"
 fi
 
-# Step 5: Activate the new environment
-echo "[*] Activating conda environment '$ENV_NAME'..."
+# -----------------------------------------------------------------------------
+# Step 4: Create and activate environment
+# -----------------------------------------------------------------------------
+echo "[*] Creating conda environment '$ENV_NAME'..."
+conda create -y -n "$ENV_NAME" python="$PY_VER"
 conda activate "$ENV_NAME"
 
-
-# Step 6. Install base conda packages
-echo "Updating conda packags and installing psycopg2 and tqdm..."
-conda update --all
+# -----------------------------------------------------------------------------
+# Step 5: Install Python packages
+# -----------------------------------------------------------------------------
+echo "[*] Installing Python packages..."
+conda update -y --all
 conda install -y psycopg2 tqdm pytz scikit-learn
-
-
-# Step 7. Install Graphviz libraries
-echo "Installing Graphviz libraries..."
-sudo apt install -y graphviz
-
-
-# Step 8. Install pinned pip packages
-echo "Installing pinned pip packages..."
 pip install networkx xxhash graphviz gdown torch_geometric pytz psycopg2-binary xxhash python-louvain flask
 
+# -----------------------------------------------------------------------------
+# Step 6: Install PyTorch
+# -----------------------------------------------------------------------------
+if [[ "$OS" == "darwin" ]]; then
+    echo "[*] Installing PyTorch (CPU or MPS for Apple Silicon)..."
+    pip install torch torchvision torchaudio
+else
+    echo "[*] Installing PyTorch CUDA 12.8..."
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+fi
 
-# Step 9. Install PyTorch GPU + PyG stack
-echo "Installing PyTorch CUDA 12.8..."
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# -----------------------------------------------------------------------------
+# Step 7: Setup PostgreSQL (if installed)
+# -----------------------------------------------------------------------------
+if command -v psql &> /dev/null; then
+    echo "[*] PostgreSQL detected: $(psql --version)"
+else
+    echo "[!] PostgreSQL not detected — skipping DB setup."
+fi
 
-
+# -----------------------------------------------------------------------------
 # Summary
+# -----------------------------------------------------------------------------
 cat <<EOF
 
 ✅ Kairos environment setup complete!
 
-# Step 10: Final message
-echo "------------------------------------------------------------"
-echo "✅ Git configured: $(git config --global user.name) <$(git config --global user.email)>"
-echo "✅ Conda environment '$ENV_NAME' (Python $PY_VER) created and activated"
-echo ""
-echo "To activate it again later, run:"
-echo "    source /root/miniconda3/etc/profile.d/conda.sh && conda activate $ENV_NAME"
-echo "------------------------------------------------------------"
+------------------------------------------------------------
+Git:        $(git config --global user.name) <$(git config --global user.email)>
+Python:     $(python --version)
+Conda Env:  $ENV_NAME
+Location:   $(which python)
+------------------------------------------------------------
 
+To activate your environment:
+  source "$(conda info --base)/etc/profile.d/conda.sh"
+  conda activate $ENV_NAME
+------------------------------------------------------------
 EOF
