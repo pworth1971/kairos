@@ -44,3 +44,4 @@ models/
 *.zip
 embeddings/
 *.pyc
+DARPA/Tools/ta3-java-consumer/ta3-serialization-schema/
