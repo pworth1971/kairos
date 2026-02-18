@@ -11,9 +11,9 @@
 set -euo pipefail
 
 # --- Configuration ---
-DATA_DIR="/home/kairos/DARPA/CADETS_E3/data/bin"
-OUT_DIR="/home/kairos/DARPA/CADETS_E3/data"
-CONSUMER_DIR="/home/kairos/DARPA/Tools/ta3-java-consumer/tc-bbn-kafka"
+DATA_DIR="../Data/"
+OUT_DIR="../Data/"
+CONSUMER_DIR="../../Tools/ta3-java-consumer/tc-bbn-kafka"
 
 cd "$CONSUMER_DIR"
 

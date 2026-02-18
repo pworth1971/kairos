@@ -8,7 +8,7 @@ set -euo pipefail
 
 DATA_URL="https://drive.google.com/drive/folders/179uDuz62Aw61Ehft6MoJCpPeBEz16VFy"
 
-DATA_OUTPUT_DIR="./data"
+DATA_OUTPUT_DIR="../Data"
 
 # --- Check dependencies ---
 for cmd in pip gdown pv pigz; do
